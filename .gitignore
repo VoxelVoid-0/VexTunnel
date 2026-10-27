@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local development, tools, credentials & sensitive reports
+tools/
+abuse_report/
+.env
+*.env
+.env.*
+*.pem
+*.key
+*.cert
+*.crt
+*.ovpn
+*.conf
+secrets*
+credentials*
+*.token
+*.bak
+*.backup
+*.tmp
+
+# Database and logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# Environments
+env/
+venv/
+ENV/
+.venv/
+
+# OS and IDE files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+scratch/
+
