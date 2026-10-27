@@ -15,7 +15,7 @@ RED='\033[0;31m'
 NC='\033[0m'
 BOLD='\033[1m'
 
-clear
+clear 2>/dev/null || true
 echo -e "${CYAN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║                   ⚡ VEXTUNNEL SUITE v1.0 ⚡                 ║"
@@ -77,7 +77,7 @@ if ! grep -q "alias menu=" /root/.bashrc 2>/dev/null; then
     echo "alias menu='python3 /etc/vextunnel/cli/menu.py'" >> /root/.bashrc
 fi
 
-clear
+clear 2>/dev/null || true
 echo -e "${GREEN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║           ✅ VEXTUNNEL SUITE INSTALLED SUCCESSFULLY!         ║"
