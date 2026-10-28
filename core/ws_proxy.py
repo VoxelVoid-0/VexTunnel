@@ -81,12 +81,27 @@ class SSHWebSocketProxy:
                 client_writer.write(response)
                 await client_writer.drain()
                 logger.info(f"Sent 101 Switching Protocols to {client_addr}")
+
+                # Extract any pipelined SSH data (e.g. SSH-2.0 identification string) after HTTP headers
+                last_crlf = initial_data.rfind(b"\r\n\r\n")
+                if last_crlf != -1:
+                    ssh_initial_bytes = initial_data[last_crlf + 4:]
+                else:
+                    last_lf = initial_data.rfind(b"\n\n")
+                    ssh_initial_bytes = initial_data[last_lf + 2:] if last_lf != -1 else b""
+
+                if ssh_initial_bytes:
+                    logger.info(f"Forwarding pipelined SSH bytes to Dropbear ({len(ssh_initial_bytes)} bytes): {repr(ssh_initial_bytes[:50])}")
+                    target_writer.write(ssh_initial_bytes)
+                    await target_writer.drain()
+                    ssh_started = True
+                else:
+                    ssh_started = False
             else:
                 # If non-WS raw connection, pass initial bytes straight to SSH
                 target_writer.write(initial_data)
                 await target_writer.drain()
-
-            ssh_started = not is_http
+                ssh_started = True
 
             # Client -> SSH pipe (filters out split HTTP request noise before SSH starts)
             async def client_to_ssh():
