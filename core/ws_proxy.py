@@ -61,49 +61,84 @@ class SSHWebSocketProxy:
                 logger.warning(f"Empty handshake from {client_addr}")
                 return
 
-            request_str = initial_data.decode('latin1', errors='ignore')
-            # Check for WebSocket Upgrade or standard HTTP GET/CONNECT request
-            is_ws = (
-                "upgrade" in request_str.lower() or 
-                "websocket" in request_str.lower() or
-                "http/" in request_str.lower()
+            HTTP_PREFIXES = (
+                b"GET ", b"POST ", b"HEAD ", b"CONNECT ",
+                b"PUT ", b"DELETE ", b"OPTIONS ", b"PATCH ", b"HTTP/"
             )
+
+            stripped = initial_data.lstrip()
+            is_http = any(stripped.startswith(prefix) for prefix in HTTP_PREFIXES)
+            logger.info(f"Handshake from {client_addr} ({len(initial_data)} bytes, is_http={is_http}): {repr(initial_data[:80])}")
 
             # Connect to backend SSH daemon (e.g. Dropbear on 127.0.0.1:109)
             target_reader, target_writer = await asyncio.open_connection(
                 self.target_host, self.target_port
             )
 
-            if is_ws:
+            if is_http:
                 # Send HTTP 101 Handshake response to client
                 response = self.build_handshake_response()
                 client_writer.write(response)
                 await client_writer.drain()
+                logger.info(f"Sent 101 Switching Protocols to {client_addr}")
             else:
                 # If non-WS raw connection, pass initial bytes straight to SSH
                 target_writer.write(initial_data)
                 await target_writer.drain()
 
-            # Pipe bi-directionally between client and SSH server
-            async def forward(src_reader: asyncio.StreamReader, dst_writer: asyncio.StreamWriter):
+            ssh_started = not is_http
+
+            # Client -> SSH pipe (filters out split HTTP request noise before SSH starts)
+            async def client_to_ssh():
+                nonlocal ssh_started
                 try:
                     while True:
-                        data = await src_reader.read(BUFFER_SIZE)
+                        data = await client_reader.read(BUFFER_SIZE)
                         if not data:
+                            logger.info(f"Client {client_addr} disconnected (EOF)")
                             break
-                        dst_writer.write(data)
-                        await dst_writer.drain()
-                except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
-                    pass
+
+                        if not ssh_started:
+                            s_data = data.lstrip()
+                            if any(s_data.startswith(p) for p in HTTP_PREFIXES):
+                                logger.info(f"Absorbing extra HTTP chunk from {client_addr} ({len(data)} bytes): {repr(data[:60])}")
+                                continue
+                            else:
+                                ssh_started = True
+                                logger.info(f"SSH stream started from {client_addr} ({len(data)} bytes): {repr(data[:40])}")
+
+                        target_writer.write(data)
+                        await target_writer.drain()
+                except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError) as e:
+                    logger.debug(f"Client->SSH pipe error: {e}")
                 finally:
                     try:
-                        dst_writer.close()
-                        await dst_writer.wait_closed()
+                        target_writer.close()
+                        await target_writer.wait_closed()
                     except Exception:
                         pass
 
-            pipe_to_ssh = asyncio.create_task(forward(client_reader, target_writer))
-            pipe_to_client = asyncio.create_task(forward(target_reader, client_writer))
+            # SSH -> Client pipe
+            async def ssh_to_client():
+                try:
+                    while True:
+                        data = await target_reader.read(BUFFER_SIZE)
+                        if not data:
+                            logger.info(f"SSH backend closed stream for {client_addr}")
+                            break
+                        client_writer.write(data)
+                        await client_writer.drain()
+                except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError) as e:
+                    logger.debug(f"SSH->Client pipe error: {e}")
+                finally:
+                    try:
+                        client_writer.close()
+                        await client_writer.wait_closed()
+                    except Exception:
+                        pass
+
+            pipe_to_ssh = asyncio.create_task(client_to_ssh())
+            pipe_to_client = asyncio.create_task(ssh_to_client())
 
             await asyncio.wait([pipe_to_ssh, pipe_to_client], return_when=asyncio.FIRST_COMPLETED)
 
