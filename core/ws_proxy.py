@@ -62,8 +62,8 @@ class SSHWebSocketProxy:
                 return
 
             HTTP_PREFIXES = (
-                b"GET ", b"POST ", b"HEAD ", b"CONNECT ",
-                b"PUT ", b"DELETE ", b"OPTIONS ", b"PATCH ", b"HTTP/"
+                b"GET", b"POST", b"HEAD", b"CONNECT",
+                b"PUT", b"DELETE", b"OPTIONS", b"PATCH", b"HTTP"
             )
 
             stripped = initial_data.lstrip()
