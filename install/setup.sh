@@ -31,10 +31,22 @@ fi
 
 # 2. Check Architecture
 ARCH=$(uname -m)
-if [ "$ARCH" != "x86_64" ] && [ "$ARCH" != "aarch64" ]; then
-    echo -e "${RED}[ERROR] Architecture $ARCH is not supported. Please use x86_64 or aarch64.${NC}"
-    exit 1
-fi
+case "$ARCH" in
+    x86_64|amd64)
+        ARCH_TYPE="x86_64 (Intel/AMD 64-bit)"
+        ;;
+    aarch64|arm64)
+        ARCH_TYPE="ARM64 (aarch64 / AWS Graviton / Oracle Ampere)"
+        ;;
+    armv7l|armv8l)
+        ARCH_TYPE="ARM32 ($ARCH)"
+        ;;
+    *)
+        echo -e "${RED}[ERROR] Architecture $ARCH is not supported. Please use x86_64, amd64, or aarch64.${NC}"
+        exit 1
+        ;;
+esac
+echo -e "${GREEN}==> Detected Architecture: ${CYAN}${BOLD}${ARCH_TYPE}${NC}"
 
 echo -e "${GREEN}==> Updating base system and installing dependencies...${NC}"
 export DEBIAN_FRONTEND=noninteractive
