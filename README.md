@@ -2,7 +2,7 @@
 
 > **A 100% Clean, Modern, High-Performance SSH-WebSocket & VPS Tunneling Management Suite.**  
 > Built from scratch with Zero Backdoors, Zero Telemetry, and Complete Transparency.  
-> Developed for **VexElvn** (`https://github.com/VexElvn/VexTunnel`).
+> Developed for **VoxelVoid-0** (`https://github.com/VoxelVoid-0/VexTunnel`).
 
 ---
 
@@ -38,15 +38,20 @@
 ## 🚀 Quick Setup (Ubuntu / Debian VPS)
 
 ### One-Line Automated Installer
-Run the following command as `root` on your VPS:
+Run the following command as `root` on any fresh Debian/Ubuntu VPS:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/VexElvn/VexTunnel/main/install/setup.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/VoxelVoid-0/VexTunnel/main/install.sh)
+```
+
+*Or via curl pipe:*
+```bash
+curl -fsSL https://raw.githubusercontent.com/VoxelVoid-0/VexTunnel/main/install.sh | bash
 ```
 
 *Or via Git Clone:*
 ```bash
-apt update -y && apt install -y git && git clone https://github.com/VexElvn/VexTunnel.git /etc/vextunnel && cd /etc/vextunnel && bash install/setup.sh
+apt update -y && apt install -y git && git clone https://github.com/VoxelVoid-0/VexTunnel.git /etc/vextunnel && cd /etc/vextunnel && bash install.sh
 ```
 
 ---
