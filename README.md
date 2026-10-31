@@ -4,7 +4,11 @@
 [![Security Analysis](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/security.yml/badge.svg)](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20%7C%20ARM64-orange.svg)](#)
-[![Python](https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](#)
+[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](#)
+
+> [!WARNING]
+> **🚀 Active Testing & Community Beta Release (v1.1-beta)**:  
+> VexTunnel is currently under active community testing and development. While all core services are audited, hardened, and 100% zero-backdoor, please test in staging or development VPS instances before deploying for critical commercial operations. Full LTS release coming soon!
 
 > **A 100% Clean, Modern, High-Performance SSH-WebSocket & VPS Tunneling Management Suite.**  
 > Built from scratch with Zero Backdoors, Zero Telemetry, and Complete Transparency.  
@@ -70,27 +74,34 @@ menu
 ```
 
 The interactive management interface will appear:
-```
+```text
 ╔══════════════════════════════════════════════════════════════╗
-║                   ⚡ VEXTUNNEL SUITE v1.0 ⚡                 ║
+║                   ⚡ VEXTUNNEL SUITE v1.1 ⚡                 ║
 ║         Clean • High-Speed • Zero-Backdoor VPS Suite         ║
 ╚══════════════════════════════════════════════════════════════╝
- Server IP: 198.51.100.1 | RAM: 14.2% | Disk: 8.5% | Active Users: 1
+ Host / IP : 198.51.100.1 | OS: Linux | Uptime: 7d 6h
+ RAM       : [███░░░░░░░] 30.8% (298MB/967MB)
+ Disk      : [█░░░░░░░░░] 9.6% | Active Users: 1 | Online: 1 🟢
 ──────────────────────────────────────────────────────────────
-[ SSH & WEBSOCKET MANAGEMENT ]
+[ SSH & WEBSOCKET USER MANAGEMENT ]
   1) Create SSH-WebSocket Account
-  2) Renew SSH User Account
-  3) Delete SSH User Account
-  4) List All Active Users & Expiry
+  2) Renew User Account
+  3) Delete User Account
+  4) Lock / Unlock User Account
+  5) List All Registered Users
+  6) Export Client Config & Ready-to-Copy Payloads
 
 [ SYSTEM & NETWORK CONTROLS ]
-  5) Live Services Health Check
-  6) Restart All Tunnel Services
-  7) Private Telegram Backup (Send to YOUR Bot)
+  7) Live Online Users Inspector (Real-time)
+  8) Live Services Health Check
+  9) Restart All Tunnel Services
+  10) Domain & SSL Certificate Settings
+  11) VPS Bandwidth Speedtest
+  12) Private Telegram Database Backup
 
   0) Exit
 ──────────────────────────────────────────────────────────────
-Select an option [0-7]:
+Select an option [0-12]:
 ```
 
 ---
@@ -102,11 +113,11 @@ Select an option [0-7]:
 | **OpenSSH** | `22`, `2222` | TCP | Direct Administrative & Tunnel SSH |
 | **Dropbear SSH** | `109`, `143` | TCP | Lightweight SSH for Payload Forwarding |
 | **WebSocket HTTP** | `80`, `8880` | TCP (HTTP/WS) | Bug-Host & CDN WebSocket Ingress |
-| **WebSocket HTTPS** | `443` | TCP (SSL/WSS) | SNI & Stunnel / Reverse Proxy |
+| **WebSocket HTTPS** | `443` | TCP (SSL/WSS) | Native TLS/SSL Encrypted WebSocket |
 | **BadVPN UDPGW** | `7100`, `7200`, `7300` | UDP | Online Gaming & VoIP Forwarding |
 
 ---
 
 ## 📄 License
-Released under the [MIT License](LICENSE) © 2026 VexElvn.
+Released under the [MIT License](LICENSE) © 2026 VoxelVoid-0.
 

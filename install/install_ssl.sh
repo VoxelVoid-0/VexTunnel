@@ -62,3 +62,4 @@ else
     # Direct IP Mode
     generate_self_signed "$SERVER_IP"
 fi
+
