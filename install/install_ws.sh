@@ -18,11 +18,13 @@ mkdir -p /etc/vextunnel/cli
 if [ "$DIR" != "/etc/vextunnel" ]; then
     cp "$DIR/core/ws_proxy.py" /etc/vextunnel/core/
     cp "$DIR/core/user_manager.py" /etc/vextunnel/core/
+    cp "$DIR/core/session_enforcer.py" /etc/vextunnel/core/
     cp "$DIR/core/monitor.py" /etc/vextunnel/core/
     cp "$DIR/cli/menu.py" /etc/vextunnel/cli/
 fi
 
 chmod +x /etc/vextunnel/core/ws_proxy.py
+chmod +x /etc/vextunnel/core/session_enforcer.py
 chmod +x /etc/vextunnel/cli/menu.py
 
 # Create global 'menu' command
@@ -90,8 +92,25 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable vextunnel-ws vextunnel-wss vextunnel-ws-8880
-systemctl restart vextunnel-ws vextunnel-wss vextunnel-ws-8880
+# Create Session Concurrency Enforcer Service
+cat <<'EOF' > /etc/systemd/system/vextunnel-enforcer.service
+[Unit]
+Description=VexTunnel Real-Time Session Concurrency & Limit Enforcer
+After=network.target dropbear.service
 
-echo "==> VexTunnel WebSocket Proxy active on Ports 80 (HTTP) & 443 (WSS TLS)!"
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/session_enforcer.py
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer
+systemctl restart vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer
+
+echo "==> VexTunnel Services (WS 80, WSS 443, Session Enforcer) active!"

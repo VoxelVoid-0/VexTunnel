@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-VexTunnel - User & Account Management Engine
-Author: VexElvn
+VexTunnel - User & Account Management Engine (Hardened v1.2)
+Author: VoxelVoid-0
 License: MIT
 
 Features:
-- SQLite-backed local account tracking
-- Linux user integration (useradd with /bin/false restricted shell)
-- Expiration date calculations & automated cleanup
-- Zero data leaks, zero external telemetry
+- Salted PBKDF2-SHA256 cryptographic credential hashing
+- SQLite WAL mode with 5000ms busy timeout & foreign keys
+- Strict username/password sanitization (anti-injection)
+- Linux user integration (/bin/false restricted shells)
+- Automated expiration & quota tracking
 """
 
 import sqlite3
@@ -16,16 +17,37 @@ import os
 import sys
 import subprocess
 import datetime
+import re
+import secrets
+import hashlib
 from contextlib import contextmanager
 from typing import List, Dict, Optional
+
+def hash_password(password: str) -> str:
+    """Generate salted PBKDF2-SHA256 password hash (200,000 iterations)."""
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200_000)
+    return f"pbkdf2_sha256${salt}${digest.hex()}"
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """Constant-time verification of password against stored PBKDF2-SHA256 hash."""
+    if not stored_hash or not stored_hash.startswith("pbkdf2_sha256$"):
+        return False
+    try:
+        parts = stored_hash.split("$")
+        if len(parts) != 3:
+            return False
+        _, salt, digest_hex = parts
+        calc = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 200_000)
+        return secrets.compare_digest(calc.hex(), digest_hex)
+    except Exception:
+        return False
 
 def get_default_db_path() -> str:
     if os.name == 'nt':
         return "vextunnel.db"
     if os.path.exists("/etc/vextunnel/vextunnel.db"):
         return "/etc/vextunnel/vextunnel.db"
-    if os.path.exists("/etc/securetunnel/securetunnel.db"):
-        return "/etc/securetunnel/securetunnel.db"
     return "/etc/vextunnel/vextunnel.db"
 
 DEFAULT_DB_PATH = get_default_db_path()
@@ -36,12 +58,19 @@ class UserManager:
         db_dir = os.path.dirname(self.db_path)
         if db_dir and not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
+            if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+                os.chmod(db_dir, 0o700)
         self._init_db()
 
     @contextmanager
     def _get_connection(self):
-        conn = sqlite3.connect(self.db_path)
+        """Concurrency-safe connection with WAL mode and 5000ms busy timeout."""
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("PRAGMA foreign_keys=ON;")
         try:
             yield conn
         finally:
@@ -53,66 +82,126 @@ class UserManager:
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE NOT NULL,
-                    password TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
                     protocol TEXT NOT NULL DEFAULT 'ssh-ws',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     expires_at TIMESTAMP NOT NULL,
                     max_logins INTEGER DEFAULT 2,
+                    quota_bytes INTEGER DEFAULT 0,
+                    used_bytes INTEGER DEFAULT 0,
                     status TEXT DEFAULT 'active'
                 )
             """)
             conn.commit()
 
-    def add_user(self, username: str, password: str, days: int, protocol: str = "ssh-ws", max_logins: int = 2) -> Dict:
-        """Create a new VPN/SSH user."""
+            # Schema migration check for legacy columns
+            cols = [col[1] for col in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "password_hash" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT ''")
+                # Migrate existing plaintext passwords if table was created with old schema
+                if "password" in cols:
+                    rows = conn.execute("SELECT id, password FROM users").fetchall()
+                    for r in rows:
+                        if r["password"]:
+                            h = hash_password(r["password"])
+                            conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (h, r["id"]))
+            if "quota_bytes" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN quota_bytes INTEGER DEFAULT 0")
+            if "used_bytes" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN used_bytes INTEGER DEFAULT 0")
+            conn.commit()
+
+        if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+            if os.path.exists(self.db_path):
+                try:
+                    os.chmod(self.db_path, 0o600)
+                except OSError:
+                    pass
+
+    def add_user(self, username: str, password: str, days: int, protocol: str = "ssh-ws", max_logins: int = 2, quota_bytes: int = 0) -> Dict:
+        """Create a new VPN/SSH user with cryptographic password hashing and strict validation."""
         username = username.strip().lower()
-        if not username.isalnum():
-            raise ValueError("Username must be alphanumeric with no spaces.")
+        if not re.fullmatch(r"^[a-zA-Z0-9_-]{2,32}$", username):
+            raise ValueError("Username must be 2-32 characters (alphanumeric, underscores, hyphens only).")
+
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+        if any(ch in password for ch in ("\n", "\r", "\x00")):
+            raise ValueError("Password cannot contain newlines or null control characters.")
 
         expires_at = datetime.datetime.now() + datetime.timedelta(days=days)
         exp_str = expires_at.strftime("%Y-%m-%d %H:%M:%S")
         exp_date_chage = expires_at.strftime("%Y-%m-%d")
+        pwd_hash = hash_password(password)
 
         # System user creation if on Linux as root
         if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
-            # Check if user already exists in Linux
             check = subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if check.returncode == 0:
                 raise ValueError(f"System user '{username}' already exists.")
 
-            # Create user with restricted shell (/bin/false)
             cmd_add = ["useradd", "-M", "-s", "/bin/false", "-e", exp_date_chage, username]
             res = subprocess.run(cmd_add, capture_output=True, text=True)
             if res.returncode != 0:
                 raise RuntimeError(f"Failed to create system user: {res.stderr}")
 
-            # Set password
             cmd_pass = subprocess.Popen(["chpasswd"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             _, err = cmd_pass.communicate(input=f"{username}:{password}")
             if cmd_pass.returncode != 0:
-                # Rollback system user
                 subprocess.run(["userdel", "-f", username])
                 raise RuntimeError(f"Failed to set user password: {err}")
 
-        # Record in SQLite
+        # Record in SQLite with hashed password
         with self._get_connection() as conn:
-            conn.execute("""
-                INSERT INTO users (username, password, protocol, expires_at, max_logins, status)
-                VALUES (?, ?, ?, ?, ?, 'active')
-            """, (username, password, protocol, exp_str, max_logins))
+            cols = [col[1] for col in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "password" in cols:
+                conn.execute("""
+                    INSERT INTO users (username, password, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active')
+                """, (username, "[PROTECTED]", pwd_hash, protocol, exp_str, max_logins, quota_bytes))
+            else:
+                conn.execute("""
+                    INSERT INTO users (username, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, status)
+                    VALUES (?, ?, ?, ?, ?, ?, 0, 'active')
+                """, (username, pwd_hash, protocol, exp_str, max_logins, quota_bytes))
             conn.commit()
 
         return {
             "username": username,
-            "password": password,
-            "protocol": protocol,
+            "password": password,  # Returned once upon creation for initial client configuration
+            "password_hash": pwd_hash,
             "expires_at": exp_str,
             "days": days,
-            "max_logins": max_logins
+            "max_logins": max_logins,
+            "quota_bytes": quota_bytes
         }
 
+    def change_password(self, username: str, new_password: str) -> bool:
+        """Update user password on Linux system and SQLite database."""
+        username = username.strip().lower()
+        if len(new_password) < 8:
+            raise ValueError("Password must be at least 8 characters long.")
+        if any(ch in new_password for ch in ("\n", "\r", "\x00")):
+            raise ValueError("Password cannot contain newlines or null control characters.")
+
+        if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+            cmd_pass = subprocess.Popen(["chpasswd"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            _, err = cmd_pass.communicate(input=f"{username}:{new_password}")
+            if cmd_pass.returncode != 0:
+                raise RuntimeError(f"Failed to update Linux system password: {err}")
+
+        pwd_hash = hash_password(new_password)
+        with self._get_connection() as conn:
+            cols = [col[1] for col in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "password" in cols:
+                cur = conn.execute("UPDATE users SET password = '[PROTECTED]', password_hash = ? WHERE username = ?", (pwd_hash, username))
+            else:
+                cur = conn.execute("UPDATE users SET password_hash = ? WHERE username = ?", (pwd_hash, username))
+            conn.commit()
+            return cur.rowcount > 0
+
     def delete_user(self, username: str) -> bool:
-        """Delete user from system and database."""
+        """Delete user from Linux system and SQLite database."""
         username = username.strip().lower()
         if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
             subprocess.run(["userdel", "-f", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -132,14 +221,12 @@ class UserManager:
 
             current_exp = datetime.datetime.strptime(user["expires_at"], "%Y-%m-%d %H:%M:%S")
             now = datetime.datetime.now()
-            # If already expired, extend from now; else extend from current_exp
             base_date = max(now, current_exp)
             new_exp = base_date + datetime.timedelta(days=days)
             new_exp_str = new_exp.strftime("%Y-%m-%d %H:%M:%S")
             exp_date_chage = new_exp.strftime("%Y-%m-%d")
 
             if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
-                # Update expiry in Linux shadow and unlock account
                 subprocess.run(["chage", "-E", exp_date_chage, username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["passwd", "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -173,7 +260,7 @@ class UserManager:
             return cur.rowcount > 0
 
     def list_users(self) -> List[Dict]:
-        """List all users with remaining days and status."""
+        """List all users with remaining days, quotas, and status."""
         users = []
         now = datetime.datetime.now()
         with self._get_connection() as conn:
@@ -184,21 +271,25 @@ class UserManager:
                 remaining_days = max(0, diff.days)
                 is_expired = diff.total_seconds() <= 0
                 status = "expired" if is_expired else r["status"]
+                cols = r.keys()
 
                 users.append({
                     "id": r["id"],
                     "username": r["username"],
-                    "password": r["password"],
+                    "password": "[PROTECTED - PBKDF2 HASH]",
+                    "password_hash": r["password_hash"] if "password_hash" in cols else "",
                     "protocol": r["protocol"],
                     "expires_at": r["expires_at"],
                     "remaining_days": remaining_days,
                     "max_logins": r["max_logins"],
+                    "quota_bytes": r["quota_bytes"] if "quota_bytes" in cols else 0,
+                    "used_bytes": r["used_bytes"] if "used_bytes" in cols else 0,
                     "status": status
                 })
         return users
 
     def cleanup_expired(self) -> int:
-        """Lock or remove expired accounts safely."""
+        """Lock expired accounts safely."""
         count = 0
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._get_connection() as conn:
@@ -206,7 +297,6 @@ class UserManager:
             for row in expired_users:
                 uname = row["username"]
                 if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
-                    # Lock user password instead of destructive deletion
                     subprocess.run(["passwd", "-l", uname], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 conn.execute("UPDATE users SET status = 'expired' WHERE username = ?", (uname,))
                 count += 1
@@ -238,15 +328,7 @@ if __name__ == "__main__":
                 print(f"SUCCESS: Deleted user {username}")
             else:
                 print(f"FAILED: User {username} not found")
-        elif cmd == "renew" and len(sys.argv) >= 4:
-            username = sys.argv[2]
-            days = int(sys.argv[3])
-            res = mgr.renew_user(username, days)
-            if res:
-                print(f"SUCCESS: Renewed user {username} until {res['new_expires_at']}")
-            else:
-                print(f"FAILED: User {username} not found")
         else:
-            print("Usage: user_manager.py [add <user> <pass> <days> | list | delete <user> | renew <user> <days> | cleanup]")
+            print("Usage: user_manager.py [add <user> <pass> <days> | list | delete <user> | cleanup]")
     else:
-        print("SecureTunnel UserManager initialized. Total registered users:", len(mgr.list_users()))
+        print("VexTunnel UserManager initialized. Total registered users:", len(mgr.list_users()))

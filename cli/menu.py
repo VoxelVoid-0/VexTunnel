@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VexTunnel - Interactive Terminal Management Menu (TUI)
+VexTunnel - Interactive Terminal Management Menu (TUI Hardened v1.2)
 Author: VoxelVoid-0
 License: MIT
 """
@@ -9,6 +9,7 @@ import os
 import sys
 import subprocess
 import urllib.request
+import urllib.parse
 import json
 import time
 
@@ -86,7 +87,7 @@ class VexTunnelMenu:
         online_count = stats.get("online_users_count", 0)
 
         print(f"{CYAN}{BOLD}╔══════════════════════════════════════════════════════════════╗{RESET}")
-        print(f"{CYAN}{BOLD}║                   ⚡ VEXTUNNEL SUITE v1.1 ⚡                 ║{RESET}")
+        print(f"{CYAN}{BOLD}║                   ⚡ VEXTUNNEL SUITE v1.2 ⚡                 ║{RESET}")
         print(f"{CYAN}{BOLD}║         Clean • High-Speed • Zero-Backdoor VPS Suite         ║{RESET}")
         print(f"{CYAN}{BOLD}╚══════════════════════════════════════════════════════════════╝{RESET}")
         print(f" {WHITE}Host / IP :{RESET} {YELLOW}{self.host}{RESET} | {WHITE}OS:{RESET} {stats['os']} | {WHITE}Uptime:{RESET} {GREEN}{stats.get('uptime', 'N/A')}{RESET}")
@@ -94,14 +95,29 @@ class VexTunnelMenu:
         print(f" {WHITE}Disk      :{RESET} {make_bar(stats['disk_percent'])} | {WHITE}Active Users:{RESET} {GREEN}{active_count}{RESET} | {WHITE}Online:{RESET} {GREEN}{online_count} 🟢{RESET}")
         print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
 
-    def print_client_card(self, username: str, password: str, expires_at: str, days: int):
-        """Display beautifully formatted client config card and ready-to-copy payloads."""
+    def generate_vextunnel_uri(self, username: str) -> str:
+        """Generate structured machine-readable connection URI."""
+        config = {
+            "v": "1.2",
+            "host": self.host,
+            "user": username,
+            "ws_http": 80,
+            "ws_https": 443,
+            "dropbear": 109,
+            "udpgw": 7300,
+            "payload": "GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]"
+        }
+        raw_json = json.dumps(config, separators=(',', ':'))
+        return "vextunnel://" + urllib.parse.quote(raw_json)
+
+    def print_client_card(self, username: str, password_display: str, expires_at: str, days: int):
+        """Display client connection card with payloads and deep link."""
         print(f"\n{BOLD}{GREEN}╔══════════════════════════════════════════════════════════════╗{RESET}")
         print(f"{BOLD}{GREEN}║                   CLIENT CONNECTION CARD                     ║{RESET}")
         print(f"{BOLD}{GREEN}╚══════════════════════════════════════════════════════════════╝{RESET}")
         print(f" {WHITE}Host / Server IP :{RESET} {YELLOW}{self.host}{RESET}")
         print(f" {WHITE}Username         :{RESET} {GREEN}{username}{RESET}")
-        print(f" {WHITE}Password         :{RESET} {GREEN}{password}{RESET}")
+        print(f" {WHITE}Password         :{RESET} {GREEN}{password_display}{RESET}")
         print(f" {WHITE}Expires At       :{RESET} {expires_at} ({days} Days)")
         print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
         print(f"{BOLD}[ PORT SPECIFICATIONS ]{RESET}")
@@ -120,6 +136,9 @@ class VexTunnelMenu:
         print(f"SNI: {self.host} (or bug host, e.g. www.zoom.us)")
         print(f"Payload: GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]")
         print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+        print(f"{BOLD}[ PORTABLE CONFIG URI (Deep-Link) ]{RESET}")
+        print(f"{CYAN}{self.generate_vextunnel_uri(username)}{RESET}")
+        print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
 
     def create_ssh_user(self):
         self.print_banner()
@@ -130,9 +149,9 @@ class VexTunnelMenu:
             input("\nPress Enter to return...")
             return
 
-        password = input(f"{WHITE}Enter Password: {RESET}").strip()
-        if not password:
-            print(f"{RED}Password cannot be empty!{RESET}")
+        password = input(f"{WHITE}Enter Password (min 8 chars): {RESET}").strip()
+        if len(password) < 8:
+            print(f"{RED}Password must be at least 8 characters!{RESET}")
             input("\nPress Enter to return...")
             return
 
@@ -147,10 +166,31 @@ class VexTunnelMenu:
             res = self.user_mgr.add_user(username, password, days)
             self.print_banner()
             print(f"\n{BOLD}{GREEN}✅ ACCOUNT CREATED SUCCESSFULLY!{RESET}")
+            print(f"{YELLOW}⚠️ Save the password now! In the database, it is stored as a secure PBKDF2 hash.{RESET}")
             self.print_client_card(res["username"], res["password"], res["expires_at"], days)
         except Exception as e:
             print(f"\n{RED}Error creating user:{RESET} {e}")
 
+        input("\nPress Enter to continue...")
+
+    def reset_user_password(self):
+        self.print_banner()
+        print(f"\n{BOLD}{YELLOW}=== RESET USER PASSWORD ==={RESET}\n")
+        username = input(f"{WHITE}Enter Username to change password: {RESET}").strip()
+        users = {u["username"]: u for u in self.user_mgr.list_users()}
+        if username not in users:
+            print(f"{RED}User '{username}' not found!{RESET}")
+            input("\nPress Enter to return...")
+            return
+
+        new_password = input(f"{WHITE}Enter New Password (min 8 chars): {RESET}").strip()
+        try:
+            if self.user_mgr.change_password(username, new_password):
+                print(f"\n{GREEN}✅ Password for '{username}' updated successfully! (Stored as PBKDF2 hash){RESET}")
+            else:
+                print(f"\n{RED}Failed to update password.{RESET}")
+        except Exception as e:
+            print(f"\n{RED}Error:{RESET} {e}")
         input("\nPress Enter to continue...")
 
     def renew_ssh_user(self):
@@ -234,7 +274,7 @@ class VexTunnelMenu:
 
         u = users[username]
         self.print_banner()
-        self.print_client_card(u["username"], "****** (User Password)", u["expires_at"], u["remaining_days"])
+        self.print_client_card(u["username"], "[PROTECTED - Salted PBKDF2 Hash]", u["expires_at"], u["remaining_days"])
         input("\nPress Enter to continue...")
 
     def online_users_inspector(self):
@@ -264,7 +304,7 @@ class VexTunnelMenu:
         if os.name == 'nt':
             print("Restarting mocked on Windows development environment.")
         else:
-            svc_list = ["ssh", "dropbear", "vextunnel-ws", "vextunnel-wss", "badvpn-7300"]
+            svc_list = ["ssh", "dropbear", "vextunnel-ws", "vextunnel-wss", "vextunnel-enforcer", "badvpn-7300"]
             for s in svc_list:
                 print(f"Restarting {s}...", end=" ", flush=True)
                 subprocess.run(["systemctl", "restart", s], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -318,7 +358,6 @@ class VexTunnelMenu:
             elapsed = time.time() - start_time
             size_mb = len(data) / (1024 * 1024)
             speed_mbps = round((size_mb * 8) / elapsed, 2)
-            latency_ms = round(elapsed * 100, 1)
 
             print(f"\n {WHITE}Downloaded Data :{RESET} {GREEN}{round(size_mb, 2)} MB{RESET}")
             print(f" {WHITE}Elapsed Time    :{RESET} {GREEN}{round(elapsed, 2)}s{RESET}")
@@ -361,47 +400,50 @@ class VexTunnelMenu:
             self.print_banner()
             print(f"{BOLD}[ SSH & WEBSOCKET USER MANAGEMENT ]{RESET}")
             print(f"  {CYAN}1){RESET} Create SSH-WebSocket Account")
-            print(f"  {CYAN}2){RESET} Renew User Account")
-            print(f"  {CYAN}3){RESET} Delete User Account")
-            print(f"  {CYAN}4){RESET} Lock / Unlock User Account")
-            print(f"  {CYAN}5){RESET} List All Registered Users")
-            print(f"  {CYAN}6){RESET} Export Client Config & Ready-to-Copy Payloads")
+            print(f"  {CYAN}2){RESET} Renew User Subscription")
+            print(f"  {CYAN}3){RESET} Reset User Password")
+            print(f"  {CYAN}4){RESET} Delete User Account")
+            print(f"  {CYAN}5){RESET} Lock / Unlock User Account")
+            print(f"  {CYAN}6){RESET} List All Registered Users")
+            print(f"  {CYAN}7){RESET} Export Client Config & Payloads")
             print(f"")
             print(f"{BOLD}[ SYSTEM & NETWORK CONTROLS ]{RESET}")
-            print(f"  {CYAN}7){RESET} Live Online Users Inspector (Real-time)")
-            print(f"  {CYAN}8){RESET} Live Services Health Check")
-            print(f"  {CYAN}9){RESET} Restart All Tunnel Services")
-            print(f"  {CYAN}10){RESET} Domain & SSL Certificate Settings")
-            print(f"  {CYAN}11){RESET} VPS Bandwidth Speedtest")
-            print(f"  {CYAN}12){RESET} Private Telegram Database Backup")
+            print(f"  {CYAN}8){RESET} Live Online Users Inspector (Real-time)")
+            print(f"  {CYAN}9){RESET} Live Services Health Check")
+            print(f"  {CYAN}10){RESET} Restart All Tunnel Services")
+            print(f"  {CYAN}11){RESET} Domain & SSL Certificate Settings")
+            print(f"  {CYAN}12){RESET} VPS Bandwidth Speedtest")
+            print(f"  {CYAN}13){RESET} Private Telegram Database Backup")
             print(f"")
             print(f"  {RED}0){RESET} Exit")
             print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
 
-            choice = input(f"{WHITE}Select an option [0-12]: {RESET}").strip()
+            choice = input(f"{WHITE}Select an option [0-13]: {RESET}").strip()
             if choice == "1":
                 self.create_ssh_user()
             elif choice == "2":
                 self.renew_ssh_user()
             elif choice == "3":
-                self.delete_ssh_user()
+                self.reset_user_password()
             elif choice == "4":
-                self.lock_unlock_user()
+                self.delete_ssh_user()
             elif choice == "5":
-                self.list_users()
+                self.lock_unlock_user()
             elif choice == "6":
-                self.export_client_config()
+                self.list_users()
             elif choice == "7":
-                self.online_users_inspector()
+                self.export_client_config()
             elif choice == "8":
-                self.check_health()
+                self.online_users_inspector()
             elif choice == "9":
-                self.restart_services()
+                self.check_health()
             elif choice == "10":
-                self.domain_ssl_manager()
+                self.restart_services()
             elif choice == "11":
-                self.speedtest()
+                self.domain_ssl_manager()
             elif choice == "12":
+                self.speedtest()
+            elif choice == "13":
                 self.private_backup()
             elif choice == "0":
                 clear_screen()
