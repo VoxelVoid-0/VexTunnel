@@ -6,6 +6,7 @@ The following versions of **VexTunnel** are currently being supported with secur
 
 | Version | Supported          |
 | ------- | ------------------ |
+| 1.1.x   | :white_check_mark: |
 | 1.0.x   | :white_check_mark: |
 
 ---
