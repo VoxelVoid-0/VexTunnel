@@ -36,8 +36,5 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run ShellCheck
-        uses: koalaman/shellcheck-action@v0.2.0
-        with:
-          severity: warning
-          check_together: 'yes'
-          scandir: './install'
+        run: |
+          shellcheck install/*.sh install.sh

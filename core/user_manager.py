@@ -73,8 +73,8 @@ class UserManager:
         exp_str = expires_at.strftime("%Y-%m-%d %H:%M:%S")
         exp_date_chage = expires_at.strftime("%Y-%m-%d")
 
-        # System user creation if on Linux
-        if os.name != 'nt':
+        # System user creation if on Linux as root
+        if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
             # Check if user already exists in Linux
             check = subprocess.run(["id", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if check.returncode == 0:
@@ -114,7 +114,7 @@ class UserManager:
     def delete_user(self, username: str) -> bool:
         """Delete user from system and database."""
         username = username.strip().lower()
-        if os.name != 'nt':
+        if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
             subprocess.run(["userdel", "-f", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         with self._get_connection() as conn:
@@ -138,7 +138,7 @@ class UserManager:
             new_exp_str = new_exp.strftime("%Y-%m-%d %H:%M:%S")
             exp_date_chage = new_exp.strftime("%Y-%m-%d")
 
-            if os.name != 'nt':
+            if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
                 # Update expiry in Linux shadow and unlock account
                 subprocess.run(["chage", "-E", exp_date_chage, username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 subprocess.run(["passwd", "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -185,7 +185,7 @@ class UserManager:
             expired_users = conn.execute("SELECT username FROM users WHERE expires_at <= ? AND status = 'active'", (now,)).fetchall()
             for row in expired_users:
                 uname = row["username"]
-                if os.name != 'nt':
+                if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
                     # Lock user password instead of destructive deletion
                     subprocess.run(["passwd", "-l", uname], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 conn.execute("UPDATE users SET status = 'expired' WHERE username = ?", (uname,))

@@ -36,3 +36,4 @@ If you discover a security vulnerability or potential exploit in VexTunnel, plea
 * Please submit a private security advisory directly via GitHub:
   **GitHub Security Advisory:** [Report a Vulnerability](https://github.com/VoxelVoid-0/VexTunnel/security/advisories/new)
 * You will receive an acknowledgment within 24 hours, followed by a patched release upon verification.
+

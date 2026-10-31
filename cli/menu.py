@@ -31,15 +31,19 @@ RESET = "\033[0m"
 def get_public_ip() -> str:
     """Fetch server public IP safely."""
     try:
-        req = urllib.request.Request("https://api.ipify.org?format=json", headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as resp:
+        url = "https://api.ipify.org?format=json"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3) as resp:  # nosec B310
             data = json.loads(resp.read().decode())
             return data.get("ip", "127.0.0.1")
     except Exception:
         return "127.0.0.1"
 
 def clear_screen():
-    os.system('cls' if os.name == 'nt' else 'clear')
+    if os.name == 'nt':
+        subprocess.run(["cmd", "/c", "cls"], check=False)
+    else:
+        print("\033c", end="", flush=True)
 
 class VexTunnelMenu:
     def __init__(self):
