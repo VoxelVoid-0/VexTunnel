@@ -79,6 +79,12 @@ class TestWSProxy(unittest.TestCase):
         self.assertEqual(ssl_proxy.ssl_cert, "/etc/vextunnel/certs/cert.pem")
         self.assertEqual(ssl_proxy.ssl_key, "/etc/vextunnel/certs/key.pem")
 
+    def test_proxy_concurrency_semaphore(self):
+        """Verify admission control semaphore initializes with custom max_conns."""
+        proxy = SSHWebSocketProxy("0.0.0.0", 80, "127.0.0.1", 109, max_conns=100)
+        self.assertEqual(proxy.max_conns, 100)
+        self.assertEqual(proxy.semaphore._value, 100)
+
     def test_ssl_missing_files_error(self):
         """Verify calling start with non-existent SSL files raises FileNotFoundError."""
         import asyncio

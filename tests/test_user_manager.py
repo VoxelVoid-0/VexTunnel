@@ -57,17 +57,17 @@ class TestUserManager(unittest.TestCase):
         for bad_username in malicious_inputs:
             with self.subTest(username=bad_username):
                 with self.assertRaises(ValueError):
-                    self.mgr.add_user(bad_username, "Pass123", days=30)
+                    self.mgr.add_user(bad_username, "SecretPass123", days=30)
 
     def test_add_duplicate_user(self):
         """Verify adding duplicate users raises an error."""
-        self.mgr.add_user("dupuser", "Pass1", days=30)
+        self.mgr.add_user("dupuser", "SecretPass123", days=30)
         with self.assertRaises(Exception):
-            self.mgr.add_user("dupuser", "Pass2", days=10)
+            self.mgr.add_user("dupuser", "SecretPass456", days=10)
 
     def test_delete_user(self):
         """Verify deleting an existing user removes them from SQLite."""
-        self.mgr.add_user("deluser", "Pass123", days=30)
+        self.mgr.add_user("deluser", "SecretPass123", days=30)
         self.assertEqual(len(self.mgr.list_users()), 1)
 
         result = self.mgr.delete_user("deluser")
@@ -79,7 +79,7 @@ class TestUserManager(unittest.TestCase):
 
     def test_renew_user_active(self):
         """Verify renewing an active user extends their expiry date."""
-        self.mgr.add_user("renewuser", "Pass123", days=10)
+        self.mgr.add_user("renewuser", "SecretPass123", days=10)
         initial_user = self.mgr.list_users()[0]
         initial_exp = datetime.datetime.strptime(initial_user["expires_at"], "%Y-%m-%d %H:%M:%S")
 
@@ -93,8 +93,8 @@ class TestUserManager(unittest.TestCase):
 
     def test_cleanup_expired_users(self):
         """Verify cleanup_expired locks expired accounts."""
-        self.mgr.add_user("activeuser", "Pass1", days=10)
-        self.mgr.add_user("expireduser", "Pass2", days=0)
+        self.mgr.add_user("activeuser", "SecretPass123", days=10)
+        self.mgr.add_user("expireduser", "SecretPass456", days=0)
 
         # Artificially set expireduser's date to the past in database
         past_date = (datetime.datetime.now() - datetime.timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S")
@@ -113,7 +113,7 @@ class TestUserManager(unittest.TestCase):
 
     def test_lock_unlock_user(self):
         """Verify lock_user and unlock_user toggle user status in database."""
-        self.mgr.add_user("lockuser", "Pass123", days=30)
+        self.mgr.add_user("lockuser", "SecretPass123", days=30)
         self.assertEqual(self.mgr.list_users()[0]["status"], "active")
 
         # Lock user

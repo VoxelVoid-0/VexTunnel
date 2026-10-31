@@ -139,6 +139,7 @@ def get_all_services_status():
         "WebSocket Proxy (Port 80 HTTP)": ws_80_status,
         "WebSocket Proxy (Port 443 WSS)": ws_443_status,
         "WebSocket Proxy (Port 8880)": ws_8880_status,
+        "Session Concurrency Enforcer": check_service_status("vextunnel-enforcer"),
         "BadVPN UDPGW (Port 7100)": check_service_status("badvpn-7100"),
         "BadVPN UDPGW (Port 7200)": check_service_status("badvpn-7200"),
         "BadVPN UDPGW (Port 7300)": check_service_status("badvpn-7300")
