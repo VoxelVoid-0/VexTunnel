@@ -16,6 +16,7 @@ import os
 import sys
 import subprocess
 import datetime
+from contextlib import contextmanager
 from typing import List, Dict, Optional
 
 def get_default_db_path() -> str:
@@ -37,10 +38,14 @@ class UserManager:
             os.makedirs(db_dir, exist_ok=True)
         self._init_db()
 
+    @contextmanager
     def _get_connection(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def _init_db(self):
         with self._get_connection() as conn:
