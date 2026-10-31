@@ -15,6 +15,7 @@ class TestInstaller(unittest.TestCase):
             os.path.join(self.base_dir, "install.sh"),
             os.path.join(self.base_dir, "install", "setup.sh"),
             os.path.join(self.base_dir, "install", "install_ssh.sh"),
+            os.path.join(self.base_dir, "install", "install_ssl.sh"),
             os.path.join(self.base_dir, "install", "install_ws.sh"),
             os.path.join(self.base_dir, "install", "install_badvpn.sh"),
             os.path.join(self.base_dir, "install", "install_cron.sh")

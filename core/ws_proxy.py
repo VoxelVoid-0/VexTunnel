@@ -16,6 +16,8 @@ import asyncio
 import logging
 import argparse
 import sys
+import os
+import ssl
 
 # Configure logging
 logging.basicConfig(
@@ -28,12 +30,14 @@ logger = logging.getLogger("WSProxy")
 BUFFER_SIZE = 65536  # 64 KB buffer for high-throughput tunneling
 
 class SSHWebSocketProxy:
-    def __init__(self, listen_host: str, listen_port: int, target_host: str, target_port: int, response_code: int = 101):
+    def __init__(self, listen_host: str, listen_port: int, target_host: str, target_port: int, response_code: int = 101, ssl_cert: str = None, ssl_key: str = None):
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.target_host = target_host
         self.target_port = target_port
         self.response_code = response_code
+        self.ssl_cert = ssl_cert
+        self.ssl_key = ssl_key
         self.active_connections = 0
 
     def build_handshake_response(self) -> bytes:
@@ -174,10 +178,21 @@ class SSHWebSocketProxy:
                         pass
 
     async def start(self):
+        ssl_ctx = None
+        if self.ssl_cert and self.ssl_key:
+            if not os.path.exists(self.ssl_cert):
+                raise FileNotFoundError(f"SSL certificate file not found: {self.ssl_cert}")
+            if not os.path.exists(self.ssl_key):
+                raise FileNotFoundError(f"SSL private key file not found: {self.ssl_key}")
+            ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ssl_ctx.load_cert_chain(certfile=self.ssl_cert, keyfile=self.ssl_key)
+            logger.info(f"SSL/TLS enabled on port {self.listen_port} using cert: {self.ssl_cert}")
+
         server = await asyncio.start_server(
-            self.handle_client, self.listen_host, self.listen_port
+            self.handle_client, self.listen_host, self.listen_port, ssl=ssl_ctx
         )
-        logger.info(f"SSH-WebSocket Proxy listening on {self.listen_host}:{self.listen_port}")
+        protocol = "WSS (HTTPS)" if ssl_ctx else "WS (HTTP)"
+        logger.info(f"{protocol} Proxy listening on {self.listen_host}:{self.listen_port}")
         logger.info(f"Forwarding to SSH backend at {self.target_host}:{self.target_port}")
         async with server:
             await server.serve_forever()
@@ -189,6 +204,8 @@ def main():
     parser.add_argument("--target-host", default="127.0.0.1", help="Backend SSH host (default: 127.0.0.1)")
     parser.add_argument("--target-port", type=int, default=109, help="Backend SSH port (default: 109 - Dropbear)")
     parser.add_argument("--response-code", type=int, default=101, choices=[101, 200], help="Handshake HTTP response code (101 or 200)")
+    parser.add_argument("--ssl-cert", default=None, help="Path to SSL certificate file (e.g. /etc/vextunnel/certs/cert.pem)")
+    parser.add_argument("--ssl-key", default=None, help="Path to SSL private key file (e.g. /etc/vextunnel/certs/key.pem)")
 
     args = parser.parse_args()
 
@@ -197,7 +214,9 @@ def main():
         listen_port=args.listen_port,
         target_host=args.target_host,
         target_port=args.target_port,
-        response_code=args.response_code
+        response_code=args.response_code,
+        ssl_cert=args.ssl_cert,
+        ssl_key=args.ssl_key
     )
 
     try:

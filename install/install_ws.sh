@@ -72,8 +72,26 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-systemctl enable vextunnel-ws vextunnel-ws-8880
-systemctl restart vextunnel-ws vextunnel-ws-8880
+# Create Port 443 TLS/WSS Service (Encrypted WebSocket)
+cat <<'EOF' > /etc/systemd/system/vextunnel-wss.service
+[Unit]
+Description=VexTunnel Async SSH WebSocket Proxy over TLS (Port 443)
+After=network.target dropbear.service
 
-echo "==> VexTunnel WebSocket Proxy active on Ports 80 & 8880!"
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port 443 --target-port 109 --ssl-cert /etc/vextunnel/certs/cert.pem --ssl-key /etc/vextunnel/certs/key.pem --response-code 101
+Restart=always
+RestartSec=3s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable vextunnel-ws vextunnel-wss vextunnel-ws-8880
+systemctl restart vextunnel-ws vextunnel-wss vextunnel-ws-8880
+
+echo "==> VexTunnel WebSocket Proxy active on Ports 80 (HTTP) & 443 (WSS TLS)!"

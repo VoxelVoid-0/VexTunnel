@@ -61,8 +61,9 @@ echo -e "${GREEN}==> [2/3] Fetching latest VexTunnel codebase...${NC}"
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo -e "${CYAN}==> Existing installation found in $INSTALL_DIR. Updating...${NC}"
     cd "$INSTALL_DIR"
-    git fetch origin main
-    git reset --hard origin/main
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+    git fetch origin "$CURRENT_BRANCH"
+    git reset --hard "origin/$CURRENT_BRANCH"
 else
     # Preserve any existing database if re-installing
     [ -f "$INSTALL_DIR/vextunnel.db" ] && cp "$INSTALL_DIR/vextunnel.db" /tmp/vextunnel.db.bak 2>/dev/null || true

@@ -67,6 +67,29 @@ class TestWSProxy(unittest.TestCase):
         extracted_ssh2 = only_http[last_crlf2 + 4:]
         self.assertEqual(extracted_ssh2, b"")
 
+    def test_ssl_proxy_parameters(self):
+        """Verify SSL certificate arguments are stored correctly."""
+        ssl_proxy = SSHWebSocketProxy(
+            "0.0.0.0", 443, "127.0.0.1", 109,
+            response_code=101,
+            ssl_cert="/etc/vextunnel/certs/cert.pem",
+            ssl_key="/etc/vextunnel/certs/key.pem"
+        )
+        self.assertEqual(ssl_proxy.listen_port, 443)
+        self.assertEqual(ssl_proxy.ssl_cert, "/etc/vextunnel/certs/cert.pem")
+        self.assertEqual(ssl_proxy.ssl_key, "/etc/vextunnel/certs/key.pem")
+
+    def test_ssl_missing_files_error(self):
+        """Verify calling start with non-existent SSL files raises FileNotFoundError."""
+        import asyncio
+        ssl_proxy = SSHWebSocketProxy(
+            "0.0.0.0", 443, "127.0.0.1", 109,
+            ssl_cert="/non_existent/cert.pem",
+            ssl_key="/non_existent/key.pem"
+        )
+        with self.assertRaises(FileNotFoundError):
+            asyncio.run(ssl_proxy.start())
+
 if __name__ == "__main__":
     unittest.main()
 

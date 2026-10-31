@@ -111,6 +111,21 @@ class TestUserManager(unittest.TestCase):
         self.assertEqual(user_dict["activeuser"], "active")
         self.assertEqual(user_dict["expireduser"], "expired")
 
+    def test_lock_unlock_user(self):
+        """Verify lock_user and unlock_user toggle user status in database."""
+        self.mgr.add_user("lockuser", "Pass123", days=30)
+        self.assertEqual(self.mgr.list_users()[0]["status"], "active")
+
+        # Lock user
+        lock_res = self.mgr.lock_user("lockuser")
+        self.assertTrue(lock_res)
+        self.assertEqual(self.mgr.list_users()[0]["status"], "locked")
+
+        # Unlock user
+        unlock_res = self.mgr.unlock_user("lockuser")
+        self.assertTrue(unlock_res)
+        self.assertEqual(self.mgr.list_users()[0]["status"], "active")
+
 if __name__ == "__main__":
     unittest.main()
 

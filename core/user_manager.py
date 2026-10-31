@@ -152,6 +152,26 @@ class UserManager:
                 "extended_days": days
             }
 
+    def lock_user(self, username: str) -> bool:
+        """Lock user account without deleting records."""
+        username = username.strip().lower()
+        if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+            subprocess.run(["passwd", "-l", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with self._get_connection() as conn:
+            cur = conn.execute("UPDATE users SET status = 'locked' WHERE username = ?", (username,))
+            conn.commit()
+            return cur.rowcount > 0
+
+    def unlock_user(self, username: str) -> bool:
+        """Unlock user account."""
+        username = username.strip().lower()
+        if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+            subprocess.run(["passwd", "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        with self._get_connection() as conn:
+            cur = conn.execute("UPDATE users SET status = 'active' WHERE username = ?", (username,))
+            conn.commit()
+            return cur.rowcount > 0
+
     def list_users(self) -> List[Dict]:
         """List all users with remaining days and status."""
         users = []
