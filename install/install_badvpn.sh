@@ -21,7 +21,7 @@ if [ ! -f /usr/local/bin/badvpn-udpgw ]; then
     mkdir build
     cd build
     cmake .. -DBUILD_NOTHING_BY_DEFAULT=1 -DBUILD_UDPGW=1
-    make -j$(nproc)
+    make -j"$(nproc)"
     cp udpgw/badvpn-udpgw /usr/local/bin/badvpn-udpgw
     chmod 755 /usr/local/bin/badvpn-udpgw
     cd /

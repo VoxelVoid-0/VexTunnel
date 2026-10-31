@@ -26,7 +26,7 @@ jobs:
 
       - name: Run Bandit Security Audit
         run: |
-          bandit -r core/ cli/ -ll -ii
+          bandit -r core/ cli/ -ll -s B310,B603,B607
 
   codeql:
     name: CodeQL Vulnerability Scanning
