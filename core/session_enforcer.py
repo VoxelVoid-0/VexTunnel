@@ -25,6 +25,7 @@ logger = logging.getLogger("SessionEnforcer")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.user_manager import UserManager, DEFAULT_DB_PATH
+from core.quota_manager import sync_all_quotas
 
 LOG_FILE = "/var/log/vextunnel/session.log"
 
@@ -58,57 +59,91 @@ def get_active_dropbear_sessions() -> dict:
     return user_pids
 
 def enforce_concurrency_limits(db_path: str = DEFAULT_DB_PATH) -> int:
-    """Scan and terminate sessions exceeding max_logins. Return count of killed PIDs."""
+    """
+    Synchronize active Dropbear processes with SQLite active_sessions table,
+    enforce real-time bandwidth quotas, and terminate sessions exceeding max_logins.
+    Return count of killed PIDs.
+    """
     if os.name == 'nt':
         return 0
 
     killed_count = 0
+
+    # 1. Synchronize kernel bandwidth quotas
+    try:
+        sync_all_quotas(db_path)
+    except Exception as e:
+        logger.debug(f"Quota sync error: {e}")
+
     active_processes = get_active_dropbear_sessions()
-    if not active_processes:
-        return 0
 
     try:
         conn = sqlite3.connect(db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
+
+        # 2. Synchronize active_sessions table in SQLite
+        db_sessions = conn.execute("SELECT id, username, pid FROM active_sessions WHERE status = 'active'").fetchall()
+        all_live_pids = set()
+        for pids in active_processes.values():
+            all_live_pids.update(pids)
+
+        # Close sessions in DB whose processes have exited
+        for ds in db_sessions:
+            if ds["pid"] not in all_live_pids:
+                conn.execute("UPDATE active_sessions SET status = 'closed' WHERE id = ?", (ds["id"],))
+
+        # Register newly spawned processes in DB
+        db_active_pids = {ds["pid"] for ds in db_sessions}
+        for uname, pids in active_processes.items():
+            for pid in pids:
+                if pid not in db_active_pids:
+                    conn.execute("INSERT INTO active_sessions (username, pid, status) VALUES (?, ?, 'active')", (uname, pid))
+        conn.commit()
+
+        # 3. Load user policies
         users = conn.execute("SELECT username, max_logins, status FROM users").fetchall()
         user_limits = {u["username"]: {"max": u["max_logins"], "status": u["status"]} for u in users}
-        conn.close()
-    except Exception as e:
-        logger.debug(f"DB read error: {e}")
-        return 0
 
-    for username, pids in active_processes.items():
-        user_info = user_limits.get(username)
-        # If user is expired, locked, or not in DB, terminate all sessions
-        if not user_info or user_info["status"] != "active":
-            logger.warning(f"Unauthorized/Expired user '{username}' has {len(pids)} active sessions. Terminating all.")
-            for pid in pids:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    killed_count += 1
-                except ProcessLookupError:
-                    pass
-            continue
-
-        max_allowed = user_info["max"]
-        if len(pids) > max_allowed:
-            # Sort PIDs to keep older sessions and kill newest rogue connections
-            pids.sort()
-            excess_pids = pids[max_allowed:]
-            logger.warning(f"User '{username}' exceeded max_logins ({len(pids)}/{max_allowed}). Terminating {len(excess_pids)} excess sessions.")
-            for pid in excess_pids:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                    time.sleep(0.1)
-                    # Force kill if still lingering
+        for username, pids in active_processes.items():
+            user_info = user_limits.get(username)
+            # If user is expired, locked, quota exceeded, or not in DB, terminate all sessions
+            if not user_info or user_info["status"] != "active":
+                reason = user_info["status"] if user_info else "unregistered"
+                logger.warning(f"User '{username}' is [{reason}]. Terminating all {len(pids)} active sessions.")
+                for pid in pids:
                     try:
-                        os.kill(pid, signal.SIGKILL)
+                        os.kill(pid, signal.SIGTERM)
+                        killed_count += 1
+                        conn.execute("UPDATE active_sessions SET status = 'closed' WHERE pid = ?", (pid,))
                     except ProcessLookupError:
                         pass
-                    killed_count += 1
-                    logger.info(f"Killed excess session PID {pid} for user '{username}'")
-                except ProcessLookupError:
-                    pass
+                continue
+
+            max_allowed = user_info["max"]
+            if len(pids) > max_allowed:
+                # Sort PIDs to keep older sessions and kill newest rogue connections
+                pids.sort()
+                excess_pids = pids[max_allowed:]
+                logger.warning(f"User '{username}' exceeded max_logins ({len(pids)}/{max_allowed}). Terminating {len(excess_pids)} excess sessions.")
+                for pid in excess_pids:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        time.sleep(0.1)
+                        # Force kill if still lingering
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                        killed_count += 1
+                        conn.execute("UPDATE active_sessions SET status = 'closed' WHERE pid = ?", (pid,))
+                        logger.info(f"Killed excess session PID {pid} for user '{username}'")
+                    except ProcessLookupError:
+                        pass
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.debug(f"DB or session enforcement error: {e}")
 
     return killed_count
 

@@ -19,12 +19,14 @@ if [ "$DIR" != "/etc/vextunnel" ]; then
     cp "$DIR/core/ws_proxy.py" /etc/vextunnel/core/
     cp "$DIR/core/user_manager.py" /etc/vextunnel/core/
     cp "$DIR/core/session_enforcer.py" /etc/vextunnel/core/
+    cp "$DIR/core/quota_manager.py" /etc/vextunnel/core/
     cp "$DIR/core/monitor.py" /etc/vextunnel/core/
     cp "$DIR/cli/menu.py" /etc/vextunnel/cli/
 fi
 
 chmod +x /etc/vextunnel/core/ws_proxy.py
 chmod +x /etc/vextunnel/core/session_enforcer.py
+chmod +x /etc/vextunnel/core/quota_manager.py
 chmod +x /etc/vextunnel/cli/menu.py
 
 # Create global 'menu' command

@@ -16,6 +16,7 @@ import time
 # Add core to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.user_manager import UserManager
+from core.quota_manager import format_bytes, parse_bytes, reset_user_quota
 from core.monitor import get_system_stats, get_all_services_status, get_online_users
 
 # Terminal Color Codes
@@ -162,8 +163,16 @@ class VexTunnelMenu:
             input("\nPress Enter to return...")
             return
 
+        quota_input = input(f"{WHITE}Bandwidth Quota (e.g. 50G, 100G, 0 for Unlimited) [0]: {RESET}").strip()
         try:
-            res = self.user_mgr.add_user(username, password, days)
+            quota_bytes = parse_bytes(quota_input) if quota_input else 0
+        except ValueError as ve:
+            print(f"{RED}{ve}{RESET}")
+            input("\nPress Enter to return...")
+            return
+
+        try:
+            res = self.user_mgr.add_user(username, password, days, quota_bytes=quota_bytes)
             self.print_banner()
             print(f"\n{BOLD}{GREEN}✅ ACCOUNT CREATED SUCCESSFULLY!{RESET}")
             print(f"{YELLOW}⚠️ Save the password now! In the database, it is stored as a secure PBKDF2 hash.{RESET}")
@@ -171,6 +180,22 @@ class VexTunnelMenu:
         except Exception as e:
             print(f"\n{RED}Error creating user:{RESET} {e}")
 
+        input("\nPress Enter to continue...")
+
+    def reset_user_bandwidth_quota(self):
+        self.print_banner()
+        print(f"\n{BOLD}{CYAN}=== RESET USER BANDWIDTH QUOTA ==={RESET}\n")
+        username = input(f"{WHITE}Enter Username to reset quota: {RESET}").strip()
+        users = {u["username"]: u for u in self.user_mgr.list_users()}
+        if username not in users:
+            print(f"{RED}User '{username}' not found!{RESET}")
+            input("\nPress Enter to return...")
+            return
+
+        if reset_user_quota(username, self.user_mgr.db_path):
+            print(f"\n{GREEN}✅ Bandwidth usage for '{username}' reset to 0 B and firewall unblocked!{RESET}")
+        else:
+            print(f"\n{RED}Failed to reset bandwidth quota.{RESET}")
         input("\nPress Enter to continue...")
 
     def reset_user_password(self):
@@ -245,21 +270,26 @@ class VexTunnelMenu:
 
     def list_users(self):
         self.print_banner()
-        print(f"\n{BOLD}{CYAN}=== ALL REGISTERED USERS ==={RESET}\n")
+        print(f"\n{BOLD}{CYAN}=== ALL REGISTERED USERS & BANDWIDTH USAGE ==={RESET}\n")
         users = self.user_mgr.list_users()
         if not users:
             print(f"{YELLOW}No registered users found.{RESET}")
         else:
-            print(f"{BOLD}{'USERNAME':<16} {'STATUS':<12} {'DAYS LEFT':<12} {'EXPIRES AT':<20} {'PROTOCOL'}{RESET}")
-            print(f"{DIM}──────────────────────────────────────────────────────────────────{RESET}")
+            print(f"{BOLD}{'USERNAME':<14} {'STATUS':<14} {'BANDWIDTH (USED / QUOTA)':<26} {'DAYS':<6} {'EXPIRES AT':<19}{RESET}")
+            print(f"{DIM}──────────────────────────────────────────────────────────────────────────────────{RESET}")
             for u in users:
                 if u["status"] == "active":
                     status_str = f"{GREEN}active{RESET}"
                 elif u["status"] == "locked":
                     status_str = f"{YELLOW}locked{RESET}"
+                elif u["status"] == "quota_exceeded":
+                    status_str = f"{RED}QUOTA EXCEEDED{RESET}"
                 else:
                     status_str = f"{RED}expired{RESET}"
-                print(f"{u['username']:<16} {status_str:<21} {u['remaining_days']:<12} {u['expires_at']:<20} {u['protocol']}")
+
+                quota_target = format_bytes(u["quota_bytes"]) if u["quota_bytes"] > 0 else "Unlimited"
+                bw_str = f"{format_bytes(u['used_bytes'])} / {quota_target}"
+                print(f"{u['username']:<14} {status_str:<23} {bw_str:<26} {u['remaining_days']:<6} {u['expires_at']:<19}")
         input("\nPress Enter to continue...")
 
     def export_client_config(self):
@@ -402,23 +432,24 @@ class VexTunnelMenu:
             print(f"  {CYAN}1){RESET} Create SSH-WebSocket Account")
             print(f"  {CYAN}2){RESET} Renew User Subscription")
             print(f"  {CYAN}3){RESET} Reset User Password")
-            print(f"  {CYAN}4){RESET} Delete User Account")
-            print(f"  {CYAN}5){RESET} Lock / Unlock User Account")
-            print(f"  {CYAN}6){RESET} List All Registered Users")
-            print(f"  {CYAN}7){RESET} Export Client Config & Payloads")
+            print(f"  {CYAN}4){RESET} Reset User Bandwidth Quota")
+            print(f"  {CYAN}5){RESET} Delete User Account")
+            print(f"  {CYAN}6){RESET} Lock / Unlock User Account")
+            print(f"  {CYAN}7){RESET} List All Registered Users")
+            print(f"  {CYAN}8){RESET} Export Client Config & Payloads")
             print(f"")
             print(f"{BOLD}[ SYSTEM & NETWORK CONTROLS ]{RESET}")
-            print(f"  {CYAN}8){RESET} Live Online Users Inspector (Real-time)")
-            print(f"  {CYAN}9){RESET} Live Services Health Check")
-            print(f"  {CYAN}10){RESET} Restart All Tunnel Services")
-            print(f"  {CYAN}11){RESET} Domain & SSL Certificate Settings")
-            print(f"  {CYAN}12){RESET} VPS Bandwidth Speedtest")
-            print(f"  {CYAN}13){RESET} Private Telegram Database Backup")
+            print(f"  {CYAN}9){RESET} Live Online Users Inspector (Real-time)")
+            print(f"  {CYAN}10){RESET} Live Services Health Check")
+            print(f"  {CYAN}11){RESET} Restart All Tunnel Services")
+            print(f"  {CYAN}12){RESET} Domain & SSL Certificate Settings")
+            print(f"  {CYAN}13){RESET} VPS Bandwidth Speedtest")
+            print(f"  {CYAN}14){RESET} Private Telegram Database Backup")
             print(f"")
             print(f"  {RED}0){RESET} Exit")
             print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
 
-            choice = input(f"{WHITE}Select an option [0-13]: {RESET}").strip()
+            choice = input(f"{WHITE}Select an option [0-14]: {RESET}").strip()
             if choice == "1":
                 self.create_ssh_user()
             elif choice == "2":
@@ -426,24 +457,26 @@ class VexTunnelMenu:
             elif choice == "3":
                 self.reset_user_password()
             elif choice == "4":
-                self.delete_ssh_user()
+                self.reset_user_bandwidth_quota()
             elif choice == "5":
-                self.lock_unlock_user()
+                self.delete_ssh_user()
             elif choice == "6":
-                self.list_users()
+                self.lock_unlock_user()
             elif choice == "7":
-                self.export_client_config()
+                self.list_users()
             elif choice == "8":
-                self.online_users_inspector()
+                self.export_client_config()
             elif choice == "9":
-                self.check_health()
+                self.online_users_inspector()
             elif choice == "10":
-                self.restart_services()
+                self.check_health()
             elif choice == "11":
-                self.domain_ssl_manager()
+                self.restart_services()
             elif choice == "12":
-                self.speedtest()
+                self.domain_ssl_manager()
             elif choice == "13":
+                self.speedtest()
+            elif choice == "14":
                 self.private_backup()
             elif choice == "0":
                 clear_screen()

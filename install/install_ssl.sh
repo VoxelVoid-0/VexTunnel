@@ -46,11 +46,15 @@ if [ "$MODE" = "--domain" ] && [ -n "$DOMAIN" ]; then
     fi
 
     echo -e "${CYAN}==> Requesting Let's Encrypt SSL certificate...${NC}"
+    PRE_HOOK="systemctl stop vextunnel-ws 2>/dev/null || true"
+    POST_HOOK="systemctl start vextunnel-ws 2>/dev/null || true"
     DEPLOY_HOOK="install -m 0644 /etc/letsencrypt/live/$DOMAIN/fullchain.pem $CERTS_DIR/cert.pem && install -m 0600 /etc/letsencrypt/live/$DOMAIN/privkey.pem $CERTS_DIR/key.pem && (systemctl reload-or-restart vextunnel-wss.service || true)"
 
-    if certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email --deploy-hook "$DEPLOY_HOOK" >/dev/null 2>&1; then
+    if certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos --register-unsafely-without-email \
+        --pre-hook "$PRE_HOOK" --post-hook "$POST_HOOK" --deploy-hook "$DEPLOY_HOOK" >/dev/null 2>&1; then
         install -m 0644 "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "$CERTS_DIR/cert.pem"
         install -m 0600 "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$CERTS_DIR/key.pem"
+        systemctl enable --now certbot.timer 2>/dev/null || true
         echo -e "${GREEN}==> Official Let's Encrypt SSL certificate installed with auto-reload hook!${NC}"
     else
         echo -e "${YELLOW}[WARNING] Let's Encrypt verification failed (DNS A Record may not have fully propagated yet).${NC}"

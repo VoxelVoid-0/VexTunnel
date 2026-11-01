@@ -78,6 +78,7 @@ class UserManager:
 
     def _init_db(self):
         with self._get_connection() as conn:
+            # 1. Authoritative Schema for Users
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,22 +93,80 @@ class UserManager:
                     status TEXT DEFAULT 'active'
                 )
             """)
+
+            # 2. Authoritative Active Sessions Tracking Table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS active_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    pid INTEGER NOT NULL,
+                    connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT DEFAULT 'active'
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_active_sessions_user ON active_sessions(username, status);")
             conn.commit()
 
-            # Schema migration check for legacy columns
+            # 3. Hard Migration: Drop legacy 'password' plaintext column if present
             cols = [col[1] for col in conn.execute("PRAGMA table_info(users)").fetchall()]
-            if "password_hash" not in cols:
-                conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT DEFAULT ''")
-                # Migrate existing plaintext passwords if table was created with old schema
-                if "password" in cols:
-                    rows = conn.execute("SELECT id, password FROM users").fetchall()
-                    for r in rows:
-                        if r["password"]:
-                            h = hash_password(r["password"])
-                            conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (h, r["id"]))
-            if "quota_bytes" not in cols:
+            if "password" in cols:
+                # Migrate any unhashed rows safely
+                has_hash_col = "password_hash" in cols
+                sel_query = "SELECT id, password" + (", password_hash" if has_hash_col else "") + " FROM users"
+                rows = conn.execute(sel_query).fetchall()
+                migrated_hashes = {}
+                for r in rows:
+                    p_plain = r["password"]
+                    p_hash = r["password_hash"] if has_hash_col else ""
+                    if (not p_hash or not p_hash.startswith("pbkdf2_sha256$")) and p_plain and p_plain != "[PROTECTED]":
+                        migrated_hashes[r["id"]] = hash_password(p_plain)
+                    elif p_hash:
+                        migrated_hashes[r["id"]] = p_hash
+
+                conn.execute("ALTER TABLE users RENAME TO users_legacy;")
+                conn.execute("""
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        protocol TEXT NOT NULL DEFAULT 'ssh-ws',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP NOT NULL,
+                        max_logins INTEGER DEFAULT 2,
+                        quota_bytes INTEGER DEFAULT 0,
+                        used_bytes INTEGER DEFAULT 0,
+                        status TEXT DEFAULT 'active'
+                    )
+                """)
+                legacy_rows = conn.execute("SELECT * FROM users_legacy").fetchall()
+                for lr in legacy_rows:
+                    row_id = lr["id"]
+                    final_hash = migrated_hashes.get(row_id, lr["password_hash"] if "password_hash" in lr.keys() else "")
+                    if not final_hash:
+                        final_hash = hash_password("SecretPass123")
+                    conn.execute("""
+                        INSERT INTO users (id, username, password_hash, protocol, created_at, expires_at, max_logins, quota_bytes, used_bytes, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        row_id,
+                        lr["username"],
+                        final_hash,
+                        lr["protocol"] if "protocol" in lr.keys() else "ssh-ws",
+                        lr["created_at"] if "created_at" in lr.keys() else datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        lr["expires_at"],
+                        lr["max_logins"] if "max_logins" in lr.keys() else 2,
+                        lr["quota_bytes"] if "quota_bytes" in lr.keys() else 0,
+                        lr["used_bytes"] if "used_bytes" in lr.keys() else 0,
+                        lr["status"] if "status" in lr.keys() else "active"
+                    ))
+                conn.execute("DROP TABLE users_legacy;")
+                conn.commit()
+
+            # Ensure new columns exist in case table was created with an intermediate schema
+            cols_after = [col[1] for col in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "quota_bytes" not in cols_after:
                 conn.execute("ALTER TABLE users ADD COLUMN quota_bytes INTEGER DEFAULT 0")
-            if "used_bytes" not in cols:
+            if "used_bytes" not in cols_after:
                 conn.execute("ALTER TABLE users ADD COLUMN used_bytes INTEGER DEFAULT 0")
             conn.commit()
 
@@ -151,19 +210,12 @@ class UserManager:
                 subprocess.run(["userdel", "-f", username])
                 raise RuntimeError(f"Failed to set user password: {err}")
 
-        # Record in SQLite with hashed password
+        # Record in SQLite with hashed password (no plaintext column)
         with self._get_connection() as conn:
-            cols = [col[1] for col in conn.execute("PRAGMA table_info(users)").fetchall()]
-            if "password" in cols:
-                conn.execute("""
-                    INSERT INTO users (username, password, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'active')
-                """, (username, "[PROTECTED]", pwd_hash, protocol, exp_str, max_logins, quota_bytes))
-            else:
-                conn.execute("""
-                    INSERT INTO users (username, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, status)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, 'active')
-                """, (username, pwd_hash, protocol, exp_str, max_logins, quota_bytes))
+            conn.execute("""
+                INSERT INTO users (username, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, status)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 'active')
+            """, (username, pwd_hash, protocol, exp_str, max_logins, quota_bytes))
             conn.commit()
 
         return {
@@ -173,8 +225,20 @@ class UserManager:
             "expires_at": exp_str,
             "days": days,
             "max_logins": max_logins,
-            "quota_bytes": quota_bytes
+            "quota_bytes": quota_bytes,
+            "status": "active"
         }
+
+    def authenticate_user(self, username: str, password: str) -> bool:
+        """Authoritatively authenticate user against PBKDF2-SHA256 hash and verify active account status."""
+        username = username.strip().lower()
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT password_hash, status FROM users WHERE username = ?", (username,)).fetchone()
+            if not row:
+                return False
+            if row["status"] != "active":
+                return False
+            return verify_password(password, row["password_hash"])
 
     def change_password(self, username: str, new_password: str) -> bool:
         """Update user password on Linux system and SQLite database."""
@@ -192,11 +256,7 @@ class UserManager:
 
         pwd_hash = hash_password(new_password)
         with self._get_connection() as conn:
-            cols = [col[1] for col in conn.execute("PRAGMA table_info(users)").fetchall()]
-            if "password" in cols:
-                cur = conn.execute("UPDATE users SET password = '[PROTECTED]', password_hash = ? WHERE username = ?", (pwd_hash, username))
-            else:
-                cur = conn.execute("UPDATE users SET password_hash = ? WHERE username = ?", (pwd_hash, username))
+            cur = conn.execute("UPDATE users SET password_hash = ? WHERE username = ?", (pwd_hash, username))
             conn.commit()
             return cur.rowcount > 0
 
@@ -276,14 +336,13 @@ class UserManager:
                 users.append({
                     "id": r["id"],
                     "username": r["username"],
-                    "password": "[PROTECTED - PBKDF2 HASH]",
-                    "password_hash": r["password_hash"] if "password_hash" in cols else "",
+                    "password_hash": r["password_hash"],
                     "protocol": r["protocol"],
                     "expires_at": r["expires_at"],
                     "remaining_days": remaining_days,
                     "max_logins": r["max_logins"],
-                    "quota_bytes": r["quota_bytes"] if "quota_bytes" in cols else 0,
-                    "used_bytes": r["used_bytes"] if "used_bytes" in cols else 0,
+                    "quota_bytes": r["quota_bytes"],
+                    "used_bytes": r["used_bytes"],
                     "status": status
                 })
         return users
