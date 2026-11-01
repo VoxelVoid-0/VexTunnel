@@ -16,6 +16,11 @@ class TestHardenedSecurity(unittest.TestCase):
         self.mgr = UserManager(db_path=self.temp_db.name)
 
     def tearDown(self):
+        for u in ["pwdchangeuser"]:
+            try:
+                self.mgr.delete_user(u)
+            except Exception:
+                pass
         if os.path.exists(self.temp_db.name):
             try:
                 os.remove(self.temp_db.name)

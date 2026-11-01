@@ -18,7 +18,7 @@ class TestUserManager(unittest.TestCase):
 
     def tearDown(self):
         # Clean up temporary Linux system users created during root tests
-        for u in ["testuser1", "dupuser", "renewuser", "activeuser", "expireduser", "deluser", "authuser", "quotauser"]:
+        for u in ["testuser1", "dupuser", "renewuser", "activeuser", "expireduser", "deluser", "authuser", "quotauser", "lockuser"]:
             try:
                 self.mgr.delete_user(u)
             except Exception:
