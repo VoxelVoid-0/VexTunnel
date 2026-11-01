@@ -27,13 +27,30 @@ class TestDeepHardening(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmp_dir, "test_deep.db")
         self.user_mgr = UserManager(self.db_path)
+        for u in ["streamer", "resetme", "timetraveler", "ghostuser"]:
+            try:
+                self.user_mgr.delete_user(u)
+            except Exception:
+                pass
 
     def tearDown(self):
+        for u in ["streamer", "resetme", "timetraveler", "ghostuser"]:
+            try:
+                self.user_mgr.delete_user(u)
+            except Exception:
+                pass
         if os.path.exists(self.db_path):
             try:
                 os.remove(self.db_path)
             except OSError:
                 pass
+        for ext in ["-wal", "-shm"]:
+            sidecar = self.db_path + ext
+            if os.path.exists(sidecar):
+                try:
+                    os.remove(sidecar)
+                except OSError:
+                    pass
         for f in os.listdir(self.tmp_dir):
             try:
                 os.remove(os.path.join(self.tmp_dir, f))
