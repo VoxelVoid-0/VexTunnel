@@ -9,6 +9,10 @@ import os
 import subprocess
 import shutil
 import re
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from core.session_enforcer import SYSTEM_USERS, is_system_or_admin_user
 
 def get_uptime() -> str:
     """Get system uptime string."""
@@ -51,12 +55,11 @@ def get_online_users():
     # 2. Parse process table for non-TTY Dropbear and OpenSSH VPN tunnels
     try:
         ps_res = subprocess.run(["ps", "-eo", "user,pid,comm,args"], capture_output=True, text=True, timeout=3)
-        system_users = {"root", "dropbear", "sshd", "daemon", "nobody", "systemd-network", "systemd-resolve"}
         for line in ps_res.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 3:
                 user = parts[0]
-                if user in system_users or "grep" in line or "-p" in line:
+                if user in SYSTEM_USERS or is_system_or_admin_user(user) or "grep" in line or "-p" in line:
                     continue
                 comm = parts[2].lower()
                 args_str = " ".join(parts[3:]).lower() if len(parts) > 3 else ""
