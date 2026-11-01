@@ -39,7 +39,7 @@ class TestMonitor(unittest.TestCase):
         mock_res.stdout = mock_ps
         mock_res.returncode = 0
 
-        with patch("os.name", "posix"), patch("subprocess.run", return_value=mock_res):
+        with patch("os.name", "posix"), patch("subprocess.run", return_value=mock_res), patch("os.path.exists", return_value=False):
             online = get_online_users()
             users = [o["user"] for o in online]
 
@@ -50,6 +50,29 @@ class TestMonitor(unittest.TestCase):
             # VPN users must be captured
             self.assertIn("minsara", users, "Dropbear child process with -p args must be captured")
             self.assertIn("vpnuser", users, "OpenSSH non-tty tunnel user must be captured")
+
+    def test_get_online_users_filters_with_database(self):
+        """Verify get_online_users strictly filters to registered DB users when database is present."""
+        mock_ps = (
+            "USER       PID COMM            ARGS\n"
+            "minsara   3001 dropbear        /usr/sbin/dropbear -EF -p 143 -W 65536 -p 109 -2 10\n"
+            "unregistered 4001 sshd-session sshd-session: unregistered@notty\n"
+        )
+        mock_res = MagicMock()
+        mock_res.stdout = mock_ps
+        mock_res.returncode = 0
+
+        mock_conn = MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = [("minsara",)]
+
+        with patch("os.name", "posix"), \
+             patch("subprocess.run", return_value=mock_res), \
+             patch("os.path.exists", return_value=True), \
+             patch("sqlite3.connect", return_value=mock_conn):
+            online = get_online_users(db_path="/mock/vextunnel.db")
+            users = [o["user"] for o in online]
+            self.assertIn("minsara", users)
+            self.assertNotIn("unregistered", users)
 
 if __name__ == "__main__":
     unittest.main()
