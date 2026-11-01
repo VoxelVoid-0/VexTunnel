@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from core.user_manager import UserManager
 from core.quota_manager import format_bytes, parse_bytes, reset_user_quota
 from core.monitor import get_system_stats, get_all_services_status, get_online_users
+from core.watchdog import VexTunnelDoctor, ServiceWatchdog
 
 # Terminal Color Codes
 CYAN = "\033[96m"
@@ -370,10 +371,54 @@ class VexTunnelMenu:
 
     def check_health(self):
         self.print_banner()
-        print(f"\n{BOLD}{MAGENTA}=== SYSTEM & SERVICE STATUS ==={RESET}\n")
+        print(f"\n{BOLD}{MAGENTA}=== VEXTUNNEL HEALTH DOCTOR & SERVICE DIAGNOSTICS ==={RESET}\n")
+
+        # 1. Component Health Diagnostics
+        diag = VexTunnelDoctor.run_full_diagnostics(self.user_mgr.db_path)
+
+        db_tag = f"{GREEN}● PASS{RESET}" if diag["database"]["ok"] else f"{RED}✕ FAIL{RESET}"
+        fw_tag = f"{GREEN}● PASS{RESET}" if diag["firewall"]["ok"] else f"{RED}✕ FAIL{RESET}"
+        ssl_tag = f"{GREEN}● PASS{RESET}" if diag["ssl"]["ok"] else (f"{YELLOW}○ MISSING{RESET}" if diag["ssl"]["status"] == "missing" else f"{RED}✕ EXPIRED{RESET}")
+
+        print(f" {BOLD}[ CORE INTEGRITY INSPECTOR ]{RESET}")
+        print(f"  {WHITE}SQLite Database :{RESET} {db_tag} ({diag['database']['message']})")
+        print(f"  {WHITE}Firewall Chains :{RESET} {fw_tag} ({diag['firewall']['message']})")
+        print(f"  {WHITE}SSL Certificate :{RESET} {ssl_tag} ({diag['ssl']['message']})")
+        print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+
+        # 2. Port Listeners Check
+        ports = diag["ports"]["ports"]
+        port_items = []
+        for p, st in ports.items():
+            color = GREEN if st == "listening" else RED
+            port_items.append(f"{color}{p} ({st}){RESET}")
+        print(f" {BOLD}[ PORT LISTENERS ]{RESET} {', '.join(port_items)}")
+        print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+
+        # 3. Systemd Daemons Status
+        print(f" {BOLD}[ SYSTEM SERVICES ]{RESET}")
         services = get_all_services_status()
+        has_failed = False
         for s, st in services.items():
-            print(f" {WHITE}{s:<32}:{RESET} {st}")
+            if "STOPPED" in st or "FAILED" in st or "ERROR" in st:
+                has_failed = True
+            print(f"  {WHITE}{s:<30}:{RESET} {st}")
+
+        # 4. Self-Healing prompt if issues detected
+        if has_failed:
+            print(f"\n{YELLOW}⚠️ Inactive or failed services detected!{RESET}")
+            heal_choice = safe_input(f"{WHITE}Execute automated self-healing restart? (y/n): {RESET}").lower()
+            if heal_choice == 'y':
+                watchdog = ServiceWatchdog()
+                res = watchdog.check_and_heal_all()
+                for svc, info in res.items():
+                    if info["healed"]:
+                        print(f" {GREEN}✅ Self-Healed & Restarted: {svc}{RESET}")
+                    elif info["status"] == "active":
+                        print(f" {DIM}• Running: {svc}{RESET}")
+                    else:
+                        print(f" {RED}✕ Could not heal: {svc}{RESET}")
+
         wait_enter()
 
     def restart_services(self):
