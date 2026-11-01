@@ -30,51 +30,58 @@ def get_uptime() -> str:
     except Exception:
         return "N/A"
 
-def get_online_users():
-    """Retrieve list of currently connected SSH/Dropbear users."""
+def get_online_users(db_path: str = None) -> list:
+    """Retrieve list of currently connected VexTunnel VPN tunnel users."""
     if os.name == 'nt':
         return [{"user": "dev_user", "ip": "127.0.0.1", "service": "Dropbear", "time": "00:00"}]
 
     online = []
     seen = set()
 
-    # 1. Parse 'who' output (for interactive logins with TTY)
+    # Load registered tunnel users from DB if available so we strictly display VexTunnel accounts
+    registered_users = set()
     try:
-        res = subprocess.run(["who"], capture_output=True, text=True, timeout=3)
-        for line in res.stdout.strip().splitlines():
-            parts = line.split()
-            if len(parts) >= 2:
-                user = parts[0]
-                ip = parts[-1].strip("()") if "(" in parts[-1] else "Local/Console"
-                time_str = parts[2] if len(parts) > 2 else "N/A"
-                online.append({"user": user, "ip": ip, "service": "OpenSSH TTY", "time": time_str})
-                seen.add(user)
+        from core.user_manager import DEFAULT_DB_PATH
+        actual_db = db_path or DEFAULT_DB_PATH
+        if os.path.exists(actual_db):
+            import sqlite3
+            conn = sqlite3.connect(actual_db, timeout=2.0)
+            rows = conn.execute("SELECT username FROM users").fetchall()
+            registered_users = {r[0] for r in rows}
+            conn.close()
     except Exception:
         pass
 
-    # 2. Parse process table for non-TTY Dropbear and OpenSSH VPN tunnels
+    # Parse process table for active Dropbear and OpenSSH VPN tunnels
     try:
         ps_res = subprocess.run(["ps", "-eo", "user,pid,comm,args"], capture_output=True, text=True, timeout=3)
         for line in ps_res.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 3:
                 user = parts[0]
-                if user in SYSTEM_USERS or is_system_or_admin_user(user) or "grep" in line or "-p" in line:
+                # Filter out system daemons, administrative accounts, and grep processes
+                if user in SYSTEM_USERS or is_system_or_admin_user(user) or "grep" in line:
                     continue
+                # If registered_users is available, strictly filter to VexTunnel managed accounts
+                if registered_users and user not in registered_users:
+                    continue
+
                 comm = parts[2].lower()
                 args_str = " ".join(parts[3:]).lower() if len(parts) > 3 else ""
 
                 if "dropbear" in comm or "dropbear" in args_str:
-                    online.append({"user": user, "ip": "via WebSocket/Dropbear", "service": "Dropbear WS", "time": "Active"})
+                    if user not in seen:
+                        online.append({"user": user, "ip": "via WebSocket / Port 80/443", "service": "Dropbear WS", "time": "Active"})
+                        seen.add(user)
                 elif ("sshd" in comm or "sshd-session" in comm) and user not in seen:
-                    online.append({"user": user, "ip": "via OpenSSH Tunnel", "service": "OpenSSH Tunnel", "time": "Active"})
+                    online.append({"user": user, "ip": "via SSH Tunnel", "service": "OpenSSH Tunnel", "time": "Active"})
                     seen.add(user)
     except Exception:
         pass
 
     return online
 
-def get_system_stats():
+def get_system_stats(db_path: str = None):
     stats = {
         "os": "Linux" if os.name != 'nt' else "Windows",
         "cpu": "N/A",
@@ -83,7 +90,7 @@ def get_system_stats():
         "ram_total_mb": 0,
         "ram_percent": 0.0,
         "disk_percent": 0.0,
-        "online_users_count": len(get_online_users())
+        "online_users_count": len(get_online_users(db_path))
     }
 
     # Disk usage

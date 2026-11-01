@@ -89,7 +89,7 @@ def get_active_user_sessions() -> dict:
                 is_dropbear = "dropbear" in comm or "dropbear" in args_str
                 is_openssh = "sshd" in comm or "sshd-session" in comm or "sshd" in args_str or "sshd-session" in args_str
 
-                if (is_dropbear or is_openssh) and "-p" not in line and "-d" not in line:
+                if is_dropbear or is_openssh:
                     if uname not in user_pids:
                         user_pids[uname] = []
                     if pid not in user_pids[uname]:
@@ -111,6 +111,13 @@ def enforce_concurrency_limits(db_path: str = DEFAULT_DB_PATH) -> int:
     """
     if os.name == 'nt':
         return 0
+
+    # 0. Ensure database tables are initialized
+    try:
+        from core.user_manager import UserManager
+        UserManager(db_path)
+    except Exception:
+        pass
 
     killed_count = 0
 

@@ -18,7 +18,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from core.user_manager import UserManager
 from core.quota_manager import (
     format_bytes, parse_bytes, reset_user_quota, reset_all_quotas,
-    is_monthly_quota_reset_enabled, setup_monthly_quota_reset_timer
+    is_monthly_quota_reset_enabled, setup_monthly_quota_reset_timer,
+    sync_all_quotas
 )
 from core.monitor import get_system_stats, get_all_services_status, get_online_users
 from core.watchdog import VexTunnelDoctor, ServiceWatchdog
@@ -103,7 +104,7 @@ class VexTunnelMenu:
 
     def print_banner(self):
         clear_screen()
-        stats = get_system_stats()
+        stats = get_system_stats(self.user_mgr.db_path)
         users = self.user_mgr.list_users()
         active_count = sum(1 for u in users if u["status"] == "active")
         online_count = stats.get("online_users_count", 0)
@@ -316,31 +317,36 @@ class VexTunnelMenu:
         wait_enter()
 
     def list_users(self):
+        # Synchronize live kernel iptables accounting to show real-time bandwidth
+        try:
+            sync_all_quotas(self.user_mgr.db_path)
+        except Exception:
+            pass
         self.print_banner()
         print(f"\n{BOLD}{CYAN}=== ALL REGISTERED USERS & BANDWIDTH USAGE ==={RESET}\n")
         users = self.user_mgr.list_users()
         if not users:
             print(f"{YELLOW}No registered users found.{RESET}")
         else:
-            print(f"{BOLD}{'USERNAME':<16} {'STATUS':<16} {'BANDWIDTH (USED / QUOTA)':<26} {'DAYS':<6} {'EXPIRES AT':<19}{RESET}")
+            online_set = {s["user"] for s in get_online_users(self.user_mgr.db_path)}
+            print(f"{BOLD}{'USERNAME':<16} {'STATUS':<18} {'BANDWIDTH (USED / QUOTA)':<26} {'DAYS':<6} {'EXPIRES AT':<19}{RESET}")
             print(f"{DIM}────────────────────────────────────────────────────────────────────────────────────{RESET}")
             for u in users:
+                uname = u["username"]
+                is_online = uname in online_set
                 if u["status"] == "active":
-                    color = GREEN
-                    raw_status = "active"
+                    status_tag = f"{GREEN}active 🟢{RESET}" if is_online else f"{GREEN}active ⚪{RESET}"
                 elif u["status"] == "locked":
-                    color = YELLOW
-                    raw_status = "locked"
+                    status_tag = f"{YELLOW}locked{RESET}"
                 elif u["status"] == "quota_exceeded":
-                    color = RED
-                    raw_status = "QUOTA EXCEEDED"
+                    status_tag = f"{RED}quota exceeded{RESET}"
                 else:
-                    color = RED
-                    raw_status = "expired"
+                    status_tag = f"{RED}expired{RESET}"
 
                 quota_target = format_bytes(u["quota_bytes"]) if u["quota_bytes"] > 0 else "Unlimited"
                 bw_str = f"{format_bytes(u['used_bytes'])} / {quota_target}"
-                print(f"{u['username']:<16} {color}{raw_status:<16}{RESET} {bw_str:<26} {u['remaining_days']:<6} {u['expires_at']:<19}")
+                color = GREEN if is_online else WHITE
+                print(f"{color}{uname:<16}{RESET} {status_tag:<27} {bw_str:<26} {u['remaining_days']:<6} {u['expires_at']:<19}")
         wait_enter()
 
     def export_client_config(self):
@@ -361,16 +367,28 @@ class VexTunnelMenu:
         wait_enter()
 
     def online_users_inspector(self):
+        # Synchronize live kernel iptables accounting
+        try:
+            sync_all_quotas(self.user_mgr.db_path)
+        except Exception:
+            pass
         self.print_banner()
-        print(f"\n{BOLD}{GREEN}=== REAL-TIME ONLINE USERS ==={RESET}\n")
-        online = get_online_users()
+        print(f"\n{BOLD}{GREEN}=== REAL-TIME ONLINE USERS & DATA CONSUMPTION ==={RESET}\n")
+        online = get_online_users(self.user_mgr.db_path)
         if not online:
             print(f"{YELLOW}No active client connections right now.{RESET}")
         else:
-            print(f"{BOLD}{'USER':<18} {'IP ADDRESS':<26} {'SERVICE':<16} {'LOGIN TIME'}{RESET}")
-            print(f"{DIM}──────────────────────────────────────────────────────────────────{RESET}")
+            db_users = {u["username"]: u for u in self.user_mgr.list_users()}
+            print(f"{BOLD}{'USER':<16} {'STATUS':<12} {'BANDWIDTH (USED / QUOTA)':<26} {'SERVICE':<18} {'TUNNEL INGRESS'}{RESET}")
+            print(f"{DIM}──────────────────────────────────────────────────────────────────────────────────────────{RESET}")
             for sess in online:
-                print(f"{GREEN}{sess['user']:<18}{RESET} {sess['ip']:<26} {sess['service']:<16} {sess['time']}")
+                uname = sess['user']
+                u_info = db_users.get(uname, {})
+                used = format_bytes(u_info.get("used_bytes", 0))
+                quota = format_bytes(u_info.get("quota_bytes", 0)) if u_info.get("quota_bytes", 0) > 0 else "Unlimited"
+                bw_str = f"{used} / {quota}"
+                status_tag = f"{GREEN}ONLINE 🟢{RESET}"
+                print(f"{GREEN}{uname:<16}{RESET} {status_tag:<21} {bw_str:<26} {sess['service']:<18} {sess['ip']}")
         wait_enter()
 
     def check_health(self):
