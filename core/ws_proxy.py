@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VexTunnel - High-Performance Async SSH WebSocket Proxy (Hardened v1.2)
+VexTunnel - High-Performance Async SSH WebSocket Proxy (Hardened v1.3)
 Author: VoxelVoid-0
 License: MIT
 

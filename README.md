@@ -4,11 +4,11 @@
 [![Security Analysis](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/security.yml/badge.svg)](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20%7C%20ARM64-orange.svg)](#)
-[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg)](#)
+[![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue.svg)](#)
 
 > [!NOTE]
-> **🚀 VexTunnel v1.2.0 - Production Hardened Release**:  
-> VexTunnel v1.2.0 is an enterprise-grade, high-concurrency VPS tunneling platform featuring salted PBKDF2-SHA256 cryptographic security, strict RFC 6455 dynamic WebSocket protocol negotiation, kernel-level Linux UID byte quota enforcement, and authoritative session limit enforcement.
+> **🚀 VexTunnel v1.3.0 - Enterprise Resilience & Automation Release**:  
+> VexTunnel v1.3.0 is a production-grade, high-concurrency VPS tunneling platform featuring sliding-window IP rate limiting, automated self-healing supervisor watchdogs with circuit breaker, real-time Telegram quota alerting with anti-spam deduplication, scheduled monthly bandwidth auto-resets, and modern CMake 4.x / Ubuntu 24.04+ compatibility.
 
 > **A 100% Clean, Modern, High-Performance SSH-WebSocket & VPS Tunneling Management Suite.**  
 > Built from scratch with Zero Backdoors, Zero Telemetry, and Complete Transparency.  
@@ -25,6 +25,23 @@
   - Supports all custom HTTP/CDN payloads (`Upgrade: websocket`, custom bug hosts) used by **HTTP Custom**, **NapsternetV**, **HTTP Injector**, **NetMod**, and **KPN Tunnel**.
   - Operates on HTTP ports `80` and `8880`, plus HTTPS `443` native TLS/WSS.
 
+* **🛡️ Kernel Anti-Abuse & Sliding-Window IP Rate Limiter:**
+  - Sliding-window handshake throttle (max 20 handshakes / 5s) and per-IP concurrent connection cap (32 connections/IP) protecting against DoS.
+  - Automatic background pruning of stale IP state entries to eliminate memory leaks.
+  - Dedicated `VEXTUNNEL_LIMIT` iptables kernel chain using `hashlimit` module defending ports 80, 443, 109, and 22 against SYN flood abuse.
+
+* **🩺 Self-Healing Supervisor Watchdog & Health Doctor:**
+  - Daemon supervisor actively monitoring core services (`vextunnel-ws`, `vextunnel-wss`, `vextunnel-enforcer`, `dropbear`, `badvpn-7300`).
+  - Automated restart recovery with integrated **Circuit Breaker** (pauses restarts if a service crashes > 5 times in 120s to avoid infinite restart loops).
+  - Built-in `VexTunnelDoctor` checking SQLite B-tree integrity (`PRAGMA integrity_check`), missing firewall chains auto-recreation, port probes, and SSL cert validity with 1-click self-repair in TUI Option 10.
+
+* **📱 Telegram Quota Alert Engine & Automated Monthly Reset:**
+  - Zero-dependency Telegram Bot API client powered by Python standard library `urllib` (ultra-lightweight for 512MB RAM VPS).
+  - Multi-tier quota alerts: ⚠️ 80% Warning, 🚨 90% Critical, and 🚫 100% Exceeded Cutoff.
+  - **Anti-Spam Alert Deduplication**: SQLite schema tracks `last_quota_alert_pct` ensuring admin is alerted exactly once per threshold level.
+  - Automated monthly bandwidth quota resets via Linux Systemd Timer (`vextunnel-quota-reset.timer` on the 1st of every month at 00:00 UTC).
+  - TUI Option 14 **Telegram Bot Alerts & Backup Hub** with credential management, immediate test alerts, and database backup dispatch.
+
 * **🔒 Enterprise Cryptographic Security:**
   - **Salted PBKDF2-SHA256:** Passwords hashed with 200,000 rounds and 16-byte random salt. Zero plaintext passwords stored or returned by APIs.
   - **Fail-Hard Atomic Migration:** Database migrations strictly roll back on corrupted legacy records without silent default passwords.
@@ -32,20 +49,17 @@
 
 * **🌐 Kernel-Level UID Byte Quota Engine:**
   - Dedicated `VEXTUNNEL_QUOTA` and `VEXTUNNEL_BLOCK` iptables chains for isolated Linux UID bandwidth tracking.
+  - Delta-based accounting ensuring bandwidth usage counters survive server reboots and firewall flushes.
   - Automatic disconnection and hardware DROP rule injection upon reaching monthly quota limits.
-  - Zero-downtime quota resets with `iptables -Z` counter clearing.
 
 * **👥 Authoritative Multi-Layer Session Tracking:**
   - Live session tracking via SQLite `active_sessions` synchronized with Dropbear process tables.
   - Multi-login limiter daemon auto-terminating rogue child processes exceeding `max_logins`.
-  - OS-level `limits.conf` and `sshd_config` policies.
-
-* **🛡️ Dual SSH Architecture:**
-  - **Dropbear:** Extremely lightweight SSH daemon listening on ports `109` and `143`.
-  - **OpenSSH:** Standard hardened SSH daemon on ports `22` and `2222`.
+  - Unified OpenSSH & Dropbear tracking.
 
 * **🎮 BadVPN UDP Gateway (Gaming & VoIP):**
   - Native compilation from official source (`ambrop72/badvpn`).
+  - Modern CMake 4.x & Ubuntu 24.04/26.04 compatibility patches with verified pre-compiled fallback.
   - Active on UDP ports `7100`, `7200`, `7300` for low-latency online gaming (FreeFire, PUBG, Mobile Legends) and clear VoIP calling (WhatsApp, Discord).
 
 * **📊 Interactive Terminal UI (TUI):**
@@ -86,7 +100,7 @@ menu
 The interactive management interface will appear:
 ```text
 ╔══════════════════════════════════════════════════════════════╗
-║                  ⚡ VEXTUNNEL SUITE v1.2.0 ⚡                ║
+║                  ⚡ VEXTUNNEL SUITE v1.3.0 ⚡                ║
 ║         Clean • High-Speed • Zero-Backdoor VPS Suite         ║
 ╚══════════════════════════════════════════════════════════════╝
  Host / IP : 198.51.100.1 | OS: Linux | Uptime: 7d 6h
@@ -105,11 +119,11 @@ The interactive management interface will appear:
 
 [ SYSTEM & NETWORK CONTROLS ]
   9) Live Online Users Inspector (Real-time)
-  10) Live Services Health Check
+  10) System Diagnostics & Self-Healing Doctor
   11) Restart All Tunnel Services
   12) Domain & SSL Certificate Settings
   13) VPS Bandwidth Speedtest
-  14) Private Telegram Database Backup
+  14) Telegram Bot Alerts & Backup Hub
 
   0) Exit
 ──────────────────────────────────────────────────────────────
@@ -130,6 +144,15 @@ Select an option [0-14]:
 
 ---
 
+## 🗑️ Clean Uninstallation
+
+To completely and cleanly remove VexTunnel Suite, systemd daemons, firewall chains, binaries, and configurations from your VPS:
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/VoxelVoid-0/VexTunnel/main/install/uninstall.sh)
+```
+
+---
+
 ## 📄 License
 Released under the [MIT License](LICENSE) © 2026 VoxelVoid-0.
-

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VexTunnel - Interactive Terminal Management Menu (TUI Hardened v1.2)
+VexTunnel - Interactive Terminal Management Menu (TUI Hardened v1.3)
 Author: VoxelVoid-0
 License: MIT
 """
@@ -109,7 +109,7 @@ class VexTunnelMenu:
         online_count = stats.get("online_users_count", 0)
 
         print(f"{CYAN}{BOLD}╔══════════════════════════════════════════════════════════════╗{RESET}")
-        print(f"{CYAN}{BOLD}║                  ⚡ VEXTUNNEL SUITE v1.2.0 ⚡                ║{RESET}")
+        print(f"{CYAN}{BOLD}║                  ⚡ VEXTUNNEL SUITE v1.3.0 ⚡                ║{RESET}")
         print(f"{CYAN}{BOLD}║         Clean • High-Speed • Zero-Backdoor VPS Suite         ║{RESET}")
         print(f"{CYAN}{BOLD}╚══════════════════════════════════════════════════════════════╝{RESET}")
         print(f" {WHITE}Host / IP :{RESET} {YELLOW}{self.host}{RESET} | {WHITE}OS:{RESET} {stats['os']} | {WHITE}Uptime:{RESET} {GREEN}{stats.get('uptime', 'N/A')}{RESET}")
@@ -120,7 +120,7 @@ class VexTunnelMenu:
     def generate_vextunnel_uri(self, username: str) -> str:
         """Generate structured machine-readable connection URI."""
         config = {
-            "v": "1.2.0",
+            "v": "1.3.0",
             "host": self.host,
             "user": username,
             "ws_http": 80,

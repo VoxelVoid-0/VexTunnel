@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VexTunnel - User & Account Management Engine (Hardened v1.2)
+VexTunnel - User & Account Management Engine (Hardened v1.3)
 Author: VoxelVoid-0
 License: MIT
 
