@@ -29,38 +29,57 @@ from core.quota_manager import sync_all_quotas
 
 LOG_FILE = "/var/log/vextunnel/session.log"
 
-def get_active_dropbear_sessions() -> dict:
-    """Return dictionary of {username: [pid1, pid2, ...]} for active Dropbear sessions."""
+def get_active_user_sessions() -> dict:
+    """
+    Return dictionary of {username: [pid1, pid2, ...]} for active Dropbear and OpenSSH user sessions.
+    Inspects process table for non-system accounts running Dropbear or OpenSSH child sessions.
+    """
     if os.name == 'nt':
         return {}
 
     user_pids = {}
-    try:
-        res = subprocess.run(["ps", "-eo", "user,pid,args"], capture_output=True, text=True, timeout=5)
-        for line in res.stdout.splitlines():
-            # Dropbear authenticated session runs under the client's username
-            if "dropbear" in line and "-p" not in line and "grep" not in line:
-                parts = line.split()
-                if len(parts) >= 2:
-                    uname = parts[0]
-                    try:
-                        pid = int(parts[1])
-                    except ValueError:
-                        continue
+    system_users = {
+        "root", "dropbear", "sshd", "daemon", "nobody", "systemd-network",
+        "systemd-resolve", "messagebus", "syslog", "_apt", "sync"
+    }
 
-                    # Filter out system service accounts
-                    if uname not in ("root", "dropbear", "daemon", "nobody"):
-                        if uname not in user_pids:
-                            user_pids[uname] = []
+    try:
+        res = subprocess.run(["ps", "-eo", "user,pid,comm,args"], capture_output=True, text=True, timeout=5)
+        for line in res.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                uname = parts[0]
+                if uname in system_users or "grep" in line:
+                    continue
+                try:
+                    pid = int(parts[1])
+                except ValueError:
+                    continue
+
+                comm = parts[2].lower()
+                args_str = " ".join(parts[3:]).lower() if len(parts) > 3 else ""
+
+                # Match Dropbear sessions or OpenSSH sessions (sshd, sshd-session, etc.)
+                is_dropbear = "dropbear" in comm or "dropbear" in args_str
+                is_openssh = "sshd" in comm or "sshd-session" in comm or "sshd" in args_str or "sshd-session" in args_str
+
+                if (is_dropbear or is_openssh) and "-p" not in line and "-d" not in line:
+                    if uname not in user_pids:
+                        user_pids[uname] = []
+                    if pid not in user_pids[uname]:
                         user_pids[uname].append(pid)
     except Exception as e:
         logger.debug(f"Error querying process table: {e}")
 
     return user_pids
 
+def get_active_dropbear_sessions() -> dict:
+    """Backwards-compatible alias for get_active_user_sessions."""
+    return get_active_user_sessions()
+
 def enforce_concurrency_limits(db_path: str = DEFAULT_DB_PATH) -> int:
     """
-    Synchronize active Dropbear processes with SQLite active_sessions table,
+    Synchronize active Dropbear and OpenSSH processes with SQLite active_sessions table,
     enforce real-time bandwidth quotas, and terminate sessions exceeding max_logins.
     Return count of killed PIDs.
     """
@@ -75,7 +94,7 @@ def enforce_concurrency_limits(db_path: str = DEFAULT_DB_PATH) -> int:
     except Exception as e:
         logger.debug(f"Quota sync error: {e}")
 
-    active_processes = get_active_dropbear_sessions()
+    active_processes = get_active_user_sessions()
 
     try:
         conn = sqlite3.connect(db_path, timeout=5.0)

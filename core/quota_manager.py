@@ -184,17 +184,22 @@ def unblock_user_network(uid: int) -> bool:
         return False
 
 def kill_user_sessions(username: str):
-    """Terminate all active Dropbear/SSH child processes for the given username."""
+    """Terminate all active Dropbear and OpenSSH processes for the given username."""
     if os.name == 'nt':
         return
     try:
+        import time
+        # Graceful SIGTERM
+        subprocess.run(["pkill", "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.1)
+        # Authoritative SIGKILL loop for lingering Dropbear/OpenSSH/tunnel processes
         res = subprocess.run(["ps", "-eo", "user,pid,comm"], capture_output=True, text=True, timeout=5)
         for line in res.stdout.splitlines():
             parts = line.split()
-            if len(parts) >= 3 and parts[0] == username and "dropbear" in parts[2]:
+            if len(parts) >= 2 and parts[0] == username:
                 try:
                     pid = int(parts[1])
-                    os.kill(pid, signal.SIGTERM)
+                    os.kill(pid, signal.SIGKILL)
                 except (ValueError, ProcessLookupError):
                     pass
     except Exception as e:
@@ -228,13 +233,28 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
             if uid is not None and uid > 0:
                 setup_accounting_rule(uid)
                 iptables_bytes = read_uid_bytes(uid)
-                new_used = max(current_used, iptables_bytes)
+                last_counter = u["last_counter_bytes"] if "last_counter_bytes" in cols and u["last_counter_bytes"] is not None else 0
+
+                # Delta computation with reboot / reset watermark tolerance
+                if iptables_bytes >= last_counter:
+                    delta = iptables_bytes - last_counter
+                else:
+                    # Counter reset detected (server rebooted or iptables flushed)
+                    delta = iptables_bytes
+
+                new_used = current_used + delta
+                new_last_counter = iptables_bytes
 
                 # Quota Exceeded Enforcement
                 if quota > 0 and new_used >= quota:
                     quota_status = "quota_exceeded"
                     status = "quota_exceeded"
-                    if has_quota_status:
+                    if "last_counter_bytes" in cols and has_quota_status:
+                        conn.execute("""
+                            UPDATE users SET used_bytes = ?, last_counter_bytes = ?, quota_status = 'quota_exceeded', status = 'quota_exceeded', last_quota_sync = ?
+                            WHERE username = ?
+                        """, (new_used, new_last_counter, now_str, uname))
+                    elif has_quota_status:
                         conn.execute("""
                             UPDATE users SET used_bytes = ?, quota_status = 'quota_exceeded', status = 'quota_exceeded', last_quota_sync = ?
                             WHERE username = ?
@@ -244,8 +264,13 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
                     block_user_network(uid)
                     kill_user_sessions(uname)
                 else:
-                    if new_used != current_used:
-                        if has_quota_status:
+                    if delta > 0 or new_last_counter != last_counter:
+                        if "last_counter_bytes" in cols and has_quota_status:
+                            conn.execute("""
+                                UPDATE users SET used_bytes = ?, last_counter_bytes = ?, last_quota_sync = ?
+                                WHERE username = ?
+                            """, (new_used, new_last_counter, now_str, uname))
+                        elif has_quota_status:
                             conn.execute("""
                                 UPDATE users SET used_bytes = ?, last_quota_sync = ?
                                 WHERE username = ?
@@ -275,7 +300,15 @@ def reset_user_quota(username: str, db_path: str = DEFAULT_DB_PATH) -> bool:
     try:
         conn = sqlite3.connect(db_path, timeout=10.0)
         cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
-        if "quota_status" in cols:
+        has_last_counter = "last_counter_bytes" in cols
+        has_quota_status = "quota_status" in cols
+
+        if has_last_counter and has_quota_status:
+            cur = conn.execute("""
+                UPDATE users SET used_bytes = 0, last_counter_bytes = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
+                WHERE username = ?
+            """, (now_str, username))
+        elif has_quota_status:
             cur = conn.execute("""
                 UPDATE users SET used_bytes = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
                 WHERE username = ?

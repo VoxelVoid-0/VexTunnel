@@ -90,6 +90,7 @@ class UserManager:
                     max_logins INTEGER DEFAULT 2,
                     quota_bytes INTEGER DEFAULT 0,
                     used_bytes INTEGER DEFAULT 0,
+                    last_counter_bytes INTEGER DEFAULT 0,
                     quota_status TEXT DEFAULT 'active',
                     last_quota_sync TIMESTAMP,
                     status TEXT DEFAULT 'active'
@@ -180,6 +181,8 @@ class UserManager:
                 conn.execute("ALTER TABLE users ADD COLUMN quota_bytes INTEGER DEFAULT 0")
             if "used_bytes" not in cols_after:
                 conn.execute("ALTER TABLE users ADD COLUMN used_bytes INTEGER DEFAULT 0")
+            if "last_counter_bytes" not in cols_after:
+                conn.execute("ALTER TABLE users ADD COLUMN last_counter_bytes INTEGER DEFAULT 0")
             if "quota_status" not in cols_after:
                 conn.execute("ALTER TABLE users ADD COLUMN quota_status TEXT DEFAULT 'active'")
             if "last_quota_sync" not in cols_after:
@@ -248,10 +251,21 @@ class UserManager:
     def authenticate_user(self, username: str, password: str) -> bool:
         """Authoritatively authenticate user against PBKDF2-SHA256 hash and verify active account status."""
         username = username.strip().lower()
+        now = datetime.datetime.now()
         with self._get_connection() as conn:
-            row = conn.execute("SELECT password_hash, status, quota_status FROM users WHERE username = ?", (username,)).fetchone()
+            row = conn.execute("SELECT password_hash, status, quota_status, expires_at FROM users WHERE username = ?", (username,)).fetchone()
             if not row:
                 return False
+            # Authoritative Expiry Check: Reject immediately and commit expired status to DB
+            try:
+                exp = datetime.datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S")
+                if now >= exp:
+                    if row["status"] != "expired":
+                        conn.execute("UPDATE users SET status = 'expired' WHERE username = ?", (username,))
+                        conn.commit()
+                    return False
+            except Exception:
+                pass
             if row["status"] != "active":
                 return False
             if "quota_status" in row.keys() and row["quota_status"] == "quota_exceeded":
@@ -338,11 +352,12 @@ class UserManager:
             return cur.rowcount > 0
 
     def list_users(self) -> List[Dict]:
-        """List all users with remaining days, quotas, and status."""
+        """List all users with remaining days, quotas, and status, and synchronize expired statuses."""
         users = []
         now = datetime.datetime.now()
         with self._get_connection() as conn:
             rows = conn.execute("SELECT * FROM users ORDER BY expires_at ASC").fetchall()
+            expired_to_sync = []
             for r in rows:
                 exp = datetime.datetime.strptime(r["expires_at"], "%Y-%m-%d %H:%M:%S")
                 diff = exp - now
@@ -350,6 +365,9 @@ class UserManager:
                 is_expired = diff.total_seconds() <= 0
                 status = "expired" if is_expired else r["status"]
                 cols = r.keys()
+
+                if is_expired and r["status"] == "active":
+                    expired_to_sync.append((r["id"], r["username"]))
 
                 users.append({
                     "id": r["id"],
@@ -361,10 +379,20 @@ class UserManager:
                     "max_logins": r["max_logins"],
                     "quota_bytes": r["quota_bytes"],
                     "used_bytes": r["used_bytes"],
+                    "last_counter_bytes": r["last_counter_bytes"] if "last_counter_bytes" in cols else 0,
                     "quota_status": r["quota_status"] if "quota_status" in cols else "active",
                     "last_quota_sync": r["last_quota_sync"] if "last_quota_sync" in cols else None,
                     "status": status
                 })
+
+            # Authoritatively commit expired accounts to DB and lock system user
+            for uid_row, uname in expired_to_sync:
+                conn.execute("UPDATE users SET status = 'expired' WHERE id = ?", (uid_row,))
+                if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+                    subprocess.run(["passwd", "-l", uname], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if expired_to_sync:
+                conn.commit()
+
         return users
 
     def cleanup_expired(self) -> int:

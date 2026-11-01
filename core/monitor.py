@@ -32,7 +32,9 @@ def get_online_users():
         return [{"user": "dev_user", "ip": "127.0.0.1", "service": "Dropbear", "time": "00:00"}]
 
     online = []
-    # 1. Parse 'who' output
+    seen = set()
+
+    # 1. Parse 'who' output (for interactive logins with TTY)
     try:
         res = subprocess.run(["who"], capture_output=True, text=True, timeout=3)
         for line in res.stdout.strip().splitlines():
@@ -41,20 +43,29 @@ def get_online_users():
                 user = parts[0]
                 ip = parts[-1].strip("()") if "(" in parts[-1] else "Local/Console"
                 time_str = parts[2] if len(parts) > 2 else "N/A"
-                online.append({"user": user, "ip": ip, "service": "OpenSSH", "time": time_str})
+                online.append({"user": user, "ip": ip, "service": "OpenSSH TTY", "time": time_str})
+                seen.add(user)
     except Exception:
         pass
 
-    # 2. Parse Dropbear active processes
+    # 2. Parse process table for non-TTY Dropbear and OpenSSH VPN tunnels
     try:
-        ps_res = subprocess.run(["ps", "-eo", "user,pid,args"], capture_output=True, text=True, timeout=3)
+        ps_res = subprocess.run(["ps", "-eo", "user,pid,comm,args"], capture_output=True, text=True, timeout=3)
+        system_users = {"root", "dropbear", "sshd", "daemon", "nobody", "systemd-network", "systemd-resolve"}
         for line in ps_res.stdout.splitlines():
-            if "dropbear" in line and "-p" not in line and "grep" not in line:
-                parts = line.split()
-                if len(parts) >= 3:
-                    user = parts[0]
-                    if user != "root" and user != "dropbear":
-                        online.append({"user": user, "ip": "via WebSocket/Dropbear", "service": "Dropbear WS", "time": "Active"})
+            parts = line.split()
+            if len(parts) >= 3:
+                user = parts[0]
+                if user in system_users or "grep" in line or "-p" in line:
+                    continue
+                comm = parts[2].lower()
+                args_str = " ".join(parts[3:]).lower() if len(parts) > 3 else ""
+
+                if "dropbear" in comm or "dropbear" in args_str:
+                    online.append({"user": user, "ip": "via WebSocket/Dropbear", "service": "Dropbear WS", "time": "Active"})
+                elif ("sshd" in comm or "sshd-session" in comm) and user not in seen:
+                    online.append({"user": user, "ip": "via OpenSSH Tunnel", "service": "OpenSSH Tunnel", "time": "Active"})
+                    seen.add(user)
     except Exception:
         pass
 

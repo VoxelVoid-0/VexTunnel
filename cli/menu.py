@@ -74,6 +74,22 @@ def make_bar(percent: float, length: int = 10) -> str:
         color = GREEN
     return f"{color}[{bar}]{RESET} {percent}%"
 
+def safe_input(prompt: str = "") -> str:
+    """Prompt user for input with graceful KeyboardInterrupt and EOF handling."""
+    try:
+        val = input(prompt)
+        return val.strip()
+    except (KeyboardInterrupt, EOFError):
+        print(f"\n{YELLOW}Operation cancelled.{RESET}")
+        return "0"
+
+def wait_enter():
+    """Wait for user to press Enter safely without crashing on Ctrl+C."""
+    try:
+        input("\nPress Enter to continue...")
+    except (KeyboardInterrupt, EOFError):
+        pass
+
 class VexTunnelMenu:
     def __init__(self):
         self.user_mgr = UserManager()
@@ -144,31 +160,36 @@ class VexTunnelMenu:
     def create_ssh_user(self):
         self.print_banner()
         print(f"\n{BOLD}{GREEN}=== CREATE NEW SSH-WEBSOCKET USER ==={RESET}\n")
-        username = input(f"{WHITE}Enter Username: {RESET}").strip()
-        if not username:
-            print(f"{RED}Username cannot be empty!{RESET}")
-            input("\nPress Enter to return...")
+        username = safe_input(f"{WHITE}Enter Username (or '0' to cancel): {RESET}")
+        if not username or username in ('0', 'q', 'exit'):
             return
 
-        password = input(f"{WHITE}Enter Password (min 8 chars): {RESET}").strip()
+        password = safe_input(f"{WHITE}Enter Password (min 8 chars, or '0' to cancel): {RESET}")
+        if not password or password in ('0', 'q', 'exit'):
+            return
         if len(password) < 8:
             print(f"{RED}Password must be at least 8 characters!{RESET}")
-            input("\nPress Enter to return...")
+            wait_enter()
             return
 
+        days_raw = safe_input(f"{WHITE}Active Days (e.g. 30, or '0' to cancel): {RESET}")
+        if not days_raw or days_raw in ('0', 'q', 'exit'):
+            return
         try:
-            days = int(input(f"{WHITE}Active Days (e.g. 30): {RESET}").strip())
+            days = int(days_raw)
         except ValueError:
             print(f"{RED}Invalid number of days!{RESET}")
-            input("\nPress Enter to return...")
+            wait_enter()
             return
 
-        quota_input = input(f"{WHITE}Bandwidth Quota (e.g. 50G, 100G, 0 for Unlimited) [0]: {RESET}").strip()
+        quota_input = safe_input(f"{WHITE}Bandwidth Quota (e.g. 50G, 100G, 0 for Unlimited) [0]: {RESET}")
+        if quota_input in ('q', 'exit'):
+            return
         try:
             quota_bytes = parse_bytes(quota_input) if quota_input else 0
         except ValueError as ve:
             print(f"{RED}{ve}{RESET}")
-            input("\nPress Enter to return...")
+            wait_enter()
             return
 
         try:
@@ -181,35 +202,41 @@ class VexTunnelMenu:
         except Exception as e:
             print(f"\n{RED}Error creating user:{RESET} {e}")
 
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def reset_user_bandwidth_quota(self):
         self.print_banner()
         print(f"\n{BOLD}{CYAN}=== RESET USER BANDWIDTH QUOTA ==={RESET}\n")
-        username = input(f"{WHITE}Enter Username to reset quota: {RESET}").strip()
+        username = safe_input(f"{WHITE}Enter Username to reset quota (or '0' to cancel): {RESET}")
+        if not username or username in ('0', 'q', 'exit'):
+            return
         users = {u["username"]: u for u in self.user_mgr.list_users()}
         if username not in users:
             print(f"{RED}User '{username}' not found!{RESET}")
-            input("\nPress Enter to return...")
+            wait_enter()
             return
 
         if reset_user_quota(username, self.user_mgr.db_path):
             print(f"\n{GREEN}✅ Bandwidth usage for '{username}' reset to 0 B and firewall unblocked!{RESET}")
         else:
             print(f"\n{RED}Failed to reset bandwidth quota.{RESET}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def reset_user_password(self):
         self.print_banner()
         print(f"\n{BOLD}{YELLOW}=== RESET USER PASSWORD ==={RESET}\n")
-        username = input(f"{WHITE}Enter Username to change password: {RESET}").strip()
+        username = safe_input(f"{WHITE}Enter Username to change password (or '0' to cancel): {RESET}")
+        if not username or username in ('0', 'q', 'exit'):
+            return
         users = {u["username"]: u for u in self.user_mgr.list_users()}
         if username not in users:
             print(f"{RED}User '{username}' not found!{RESET}")
-            input("\nPress Enter to return...")
+            wait_enter()
             return
 
-        new_password = input(f"{WHITE}Enter New Password (min 8 chars): {RESET}").strip()
+        new_password = safe_input(f"{WHITE}Enter New Password (min 8 chars, or '0' to cancel): {RESET}")
+        if not new_password or new_password in ('0', 'q', 'exit'):
+            return
         try:
             if self.user_mgr.change_password(username, new_password):
                 print(f"\n{GREEN}✅ Password for '{username}' updated successfully! (Stored as PBKDF2 hash){RESET}")
@@ -217,14 +244,24 @@ class VexTunnelMenu:
                 print(f"\n{RED}Failed to update password.{RESET}")
         except Exception as e:
             print(f"\n{RED}Error:{RESET} {e}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def renew_ssh_user(self):
         self.print_banner()
         print(f"\n{BOLD}{YELLOW}=== RENEW SSH USER SUBSCRIPTION ==={RESET}\n")
-        username = input(f"{WHITE}Enter Username to renew: {RESET}").strip()
+        username = safe_input(f"{WHITE}Enter Username to renew (or '0' to cancel): {RESET}")
+        if not username or username in ('0', 'q', 'exit'):
+            return
+        users = {u["username"]: u for u in self.user_mgr.list_users()}
+        if username not in users:
+            print(f"{RED}User '{username}' not found!{RESET}")
+            wait_enter()
+            return
+        days_raw = safe_input(f"{WHITE}Days to extend (or '0' to cancel): {RESET}")
+        if not days_raw or days_raw in ('0', 'q', 'exit'):
+            return
         try:
-            days = int(input(f"{WHITE}Days to extend: {RESET}").strip())
+            days = int(days_raw)
             res = self.user_mgr.renew_user(username, days)
             if res:
                 print(f"\n{GREEN}✅ User '{username}' renewed until {res['new_expires_at']} (+{days} days)!{RESET}")
@@ -232,42 +269,46 @@ class VexTunnelMenu:
                 print(f"\n{RED}User '{username}' not found!{RESET}")
         except Exception as e:
             print(f"\n{RED}Error renewing user:{RESET} {e}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def delete_ssh_user(self):
         self.print_banner()
         print(f"\n{BOLD}{RED}=== DELETE SSH USER ==={RESET}\n")
-        username = input(f"{WHITE}Enter Username to delete: {RESET}").strip()
-        confirm = input(f"{YELLOW}Are you sure you want to delete '{username}'? (y/n): {RESET}").strip().lower()
+        username = safe_input(f"{WHITE}Enter Username to delete (or '0' to cancel): {RESET}")
+        if not username or username in ('0', 'q', 'exit'):
+            return
+        confirm = safe_input(f"{YELLOW}Are you sure you want to delete '{username}'? (y/n): {RESET}").lower()
         if confirm == 'y':
             if self.user_mgr.delete_user(username):
                 print(f"\n{GREEN}✅ User '{username}' deleted successfully.{RESET}")
             else:
                 print(f"\n{RED}User '{username}' not found.{RESET}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def lock_unlock_user(self):
         self.print_banner()
         print(f"\n{BOLD}{MAGENTA}=== LOCK / UNLOCK USER ACCOUNT ==={RESET}\n")
-        username = input(f"{WHITE}Enter Username: {RESET}").strip()
+        username = safe_input(f"{WHITE}Enter Username (or '0' to cancel): {RESET}")
+        if not username or username in ('0', 'q', 'exit'):
+            return
         users = {u["username"]: u for u in self.user_mgr.list_users()}
         if username not in users:
             print(f"{RED}User '{username}' not found!{RESET}")
-            input("\nPress Enter to return...")
+            wait_enter()
             return
 
         current_status = users[username]["status"]
         if current_status == "locked":
-            action = input(f"{YELLOW}Account is currently LOCKED. Unlock it? (y/n): {RESET}").strip().lower()
+            action = safe_input(f"{YELLOW}Account is currently LOCKED. Unlock it? (y/n): {RESET}").lower()
             if action == 'y':
                 if self.user_mgr.unlock_user(username):
                     print(f"\n{GREEN}✅ User '{username}' unlocked and active!{RESET}")
         else:
-            action = input(f"{YELLOW}Account is currently ACTIVE. Lock it? (y/n): {RESET}").strip().lower()
+            action = safe_input(f"{YELLOW}Account is currently ACTIVE. Lock it? (y/n): {RESET}").lower()
             if action == 'y':
                 if self.user_mgr.lock_user(username):
                     print(f"\n{YELLOW}🔒 User '{username}' has been locked!{RESET}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def list_users(self):
         self.print_banner()
@@ -276,37 +317,43 @@ class VexTunnelMenu:
         if not users:
             print(f"{YELLOW}No registered users found.{RESET}")
         else:
-            print(f"{BOLD}{'USERNAME':<14} {'STATUS':<14} {'BANDWIDTH (USED / QUOTA)':<26} {'DAYS':<6} {'EXPIRES AT':<19}{RESET}")
-            print(f"{DIM}──────────────────────────────────────────────────────────────────────────────────{RESET}")
+            print(f"{BOLD}{'USERNAME':<16} {'STATUS':<16} {'BANDWIDTH (USED / QUOTA)':<26} {'DAYS':<6} {'EXPIRES AT':<19}{RESET}")
+            print(f"{DIM}────────────────────────────────────────────────────────────────────────────────────{RESET}")
             for u in users:
                 if u["status"] == "active":
-                    status_str = f"{GREEN}active{RESET}"
+                    color = GREEN
+                    raw_status = "active"
                 elif u["status"] == "locked":
-                    status_str = f"{YELLOW}locked{RESET}"
+                    color = YELLOW
+                    raw_status = "locked"
                 elif u["status"] == "quota_exceeded":
-                    status_str = f"{RED}QUOTA EXCEEDED{RESET}"
+                    color = RED
+                    raw_status = "QUOTA EXCEEDED"
                 else:
-                    status_str = f"{RED}expired{RESET}"
+                    color = RED
+                    raw_status = "expired"
 
                 quota_target = format_bytes(u["quota_bytes"]) if u["quota_bytes"] > 0 else "Unlimited"
                 bw_str = f"{format_bytes(u['used_bytes'])} / {quota_target}"
-                print(f"{u['username']:<14} {status_str:<23} {bw_str:<26} {u['remaining_days']:<6} {u['expires_at']:<19}")
-        input("\nPress Enter to continue...")
+                print(f"{u['username']:<16} {color}{raw_status:<16}{RESET} {bw_str:<26} {u['remaining_days']:<6} {u['expires_at']:<19}")
+        wait_enter()
 
     def export_client_config(self):
         self.print_banner()
         print(f"\n{BOLD}{CYAN}=== EXPORT CLIENT CONFIG & PAYLOADS ==={RESET}\n")
-        username = input(f"{WHITE}Enter Username: {RESET}").strip()
+        username = safe_input(f"{WHITE}Enter Username (or '0' to cancel): {RESET}")
+        if not username or username in ('0', 'q', 'exit'):
+            return
         users = {u["username"]: u for u in self.user_mgr.list_users()}
         if username not in users:
             print(f"{RED}User '{username}' not found!{RESET}")
-            input("\nPress Enter to return...")
+            wait_enter()
             return
 
         u = users[username]
         self.print_banner()
         self.print_client_card(u["username"], "[PROTECTED - Salted PBKDF2 Hash]", u["expires_at"], u["remaining_days"])
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def online_users_inspector(self):
         self.print_banner()
@@ -319,7 +366,7 @@ class VexTunnelMenu:
             print(f"{DIM}──────────────────────────────────────────────────────────────────{RESET}")
             for sess in online:
                 print(f"{GREEN}{sess['user']:<18}{RESET} {sess['ip']:<26} {sess['service']:<16} {sess['time']}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def check_health(self):
         self.print_banner()
@@ -327,7 +374,7 @@ class VexTunnelMenu:
         services = get_all_services_status()
         for s, st in services.items():
             print(f" {WHITE}{s:<32}:{RESET} {st}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def restart_services(self):
         self.print_banner()
@@ -341,7 +388,7 @@ class VexTunnelMenu:
                 subprocess.run(["systemctl", "restart", s], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"{GREEN}DONE{RESET}")
         print(f"\n{GREEN}All services restarted successfully.{RESET}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def domain_ssl_manager(self):
         self.print_banner()
@@ -358,10 +405,10 @@ class VexTunnelMenu:
         print(f"  {CYAN}2){RESET} Re-generate 2048-bit RSA Self-Signed SSL Certificate")
         print(f"  {CYAN}0){RESET} Return to Main Menu")
 
-        opt = input(f"\n{WHITE}Select an option: {RESET}").strip()
+        opt = safe_input(f"\n{WHITE}Select an option [0-2]: {RESET}")
         if opt == "1":
-            new_domain = input(f"{WHITE}Enter new domain (e.g. vpn.example.com): {RESET}").strip()
-            if new_domain:
+            new_domain = safe_input(f"{WHITE}Enter new domain (e.g. vpn.example.com, or '0' to cancel): {RESET}")
+            if new_domain and new_domain not in ('0', 'q', 'exit'):
                 os.makedirs("/etc/vextunnel", exist_ok=True)
                 with open(DOMAIN_FILE, "w") as f:
                     f.write(new_domain)
@@ -373,7 +420,7 @@ class VexTunnelMenu:
                 print(f"{GREEN}SSL Certificate regenerated successfully!{RESET}")
             else:
                 print(f"{GREEN}[MOCK] SSL certificate generated on Windows.{RESET}")
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def speedtest(self):
         self.print_banner()
@@ -396,26 +443,25 @@ class VexTunnelMenu:
         except Exception as e:
             print(f"\n{RED}Speedtest failed:{RESET} {e}")
 
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def private_backup(self):
         self.print_banner()
         print(f"\n{BOLD}{GREEN}=== PRIVATE TELEGRAM BACKUP ==={RESET}\n")
         print(f"{WHITE}This will send your database directly to YOUR Telegram account.{RESET}")
         print(f"{WHITE}Zero third-party servers, 100% private.{RESET}\n")
-        bot_token = input(f"{WHITE}Enter your Telegram Bot Token: {RESET}").strip()
-        chat_id = input(f"{WHITE}Enter your Telegram Chat ID: {RESET}").strip()
-
-        if not bot_token or not chat_id:
-            print(f"{RED}Token and Chat ID are required!{RESET}")
-            input("\nPress Enter to continue...")
+        bot_token = safe_input(f"{WHITE}Enter your Telegram Bot Token (or '0' to cancel): {RESET}")
+        if not bot_token or bot_token in ('0', 'q', 'exit'):
+            return
+        chat_id = safe_input(f"{WHITE}Enter your Telegram Chat ID (or '0' to cancel): {RESET}")
+        if not chat_id or chat_id in ('0', 'q', 'exit'):
             return
 
         try:
             db_path = self.user_mgr.db_path
             if not os.path.exists(db_path):
                 print(f"{RED}Database file does not exist yet.{RESET}")
-                input("\nPress Enter to continue...")
+                wait_enter()
                 return
 
             msg_url = f"https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={chat_id}&text=VexTunnel+Backup+Initiated+from+{self.server_ip}"
@@ -424,68 +470,73 @@ class VexTunnelMenu:
         except Exception as e:
             print(f"\n{RED}Telegram send failed:{RESET} {e}")
 
-        input("\nPress Enter to continue...")
+        wait_enter()
 
     def run(self):
         while True:
-            self.print_banner()
-            print(f"{BOLD}[ SSH & WEBSOCKET USER MANAGEMENT ]{RESET}")
-            print(f"  {CYAN}1){RESET} Create SSH-WebSocket Account")
-            print(f"  {CYAN}2){RESET} Renew User Subscription")
-            print(f"  {CYAN}3){RESET} Reset User Password")
-            print(f"  {CYAN}4){RESET} Reset User Bandwidth Quota")
-            print(f"  {CYAN}5){RESET} Delete User Account")
-            print(f"  {CYAN}6){RESET} Lock / Unlock User Account")
-            print(f"  {CYAN}7){RESET} List All Registered Users")
-            print(f"  {CYAN}8){RESET} Export Client Config & Payloads")
-            print(f"")
-            print(f"{BOLD}[ SYSTEM & NETWORK CONTROLS ]{RESET}")
-            print(f"  {CYAN}9){RESET} Live Online Users Inspector (Real-time)")
-            print(f"  {CYAN}10){RESET} Live Services Health Check")
-            print(f"  {CYAN}11){RESET} Restart All Tunnel Services")
-            print(f"  {CYAN}12){RESET} Domain & SSL Certificate Settings")
-            print(f"  {CYAN}13){RESET} VPS Bandwidth Speedtest")
-            print(f"  {CYAN}14){RESET} Private Telegram Database Backup")
-            print(f"")
-            print(f"  {RED}0){RESET} Exit")
-            print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+            try:
+                self.print_banner()
+                print(f"{BOLD}[ SSH & WEBSOCKET USER MANAGEMENT ]{RESET}")
+                print(f"  {CYAN}1){RESET} Create SSH-WebSocket Account")
+                print(f"  {CYAN}2){RESET} Renew User Subscription")
+                print(f"  {CYAN}3){RESET} Reset User Password")
+                print(f"  {CYAN}4){RESET} Reset User Bandwidth Quota")
+                print(f"  {CYAN}5){RESET} Delete User Account")
+                print(f"  {CYAN}6){RESET} Lock / Unlock User Account")
+                print(f"  {CYAN}7){RESET} List All Registered Users")
+                print(f"  {CYAN}8){RESET} Export Client Config & Payloads")
+                print(f"")
+                print(f"{BOLD}[ SYSTEM & NETWORK CONTROLS ]{RESET}")
+                print(f"  {CYAN}9){RESET} Live Online Users Inspector (Real-time)")
+                print(f"  {CYAN}10){RESET} Live Services Health Check")
+                print(f"  {CYAN}11){RESET} Restart All Tunnel Services")
+                print(f"  {CYAN}12){RESET} Domain & SSL Certificate Settings")
+                print(f"  {CYAN}13){RESET} VPS Bandwidth Speedtest")
+                print(f"  {CYAN}14){RESET} Private Telegram Database Backup")
+                print(f"")
+                print(f"  {RED}0){RESET} Exit")
+                print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
 
-            choice = input(f"{WHITE}Select an option [0-14]: {RESET}").strip()
-            if choice == "1":
-                self.create_ssh_user()
-            elif choice == "2":
-                self.renew_ssh_user()
-            elif choice == "3":
-                self.reset_user_password()
-            elif choice == "4":
-                self.reset_user_bandwidth_quota()
-            elif choice == "5":
-                self.delete_ssh_user()
-            elif choice == "6":
-                self.lock_unlock_user()
-            elif choice == "7":
-                self.list_users()
-            elif choice == "8":
-                self.export_client_config()
-            elif choice == "9":
-                self.online_users_inspector()
-            elif choice == "10":
-                self.check_health()
-            elif choice == "11":
-                self.restart_services()
-            elif choice == "12":
-                self.domain_ssl_manager()
-            elif choice == "13":
-                self.speedtest()
-            elif choice == "14":
-                self.private_backup()
-            elif choice == "0":
+                choice = safe_input(f"{WHITE}Select an option [0-14]: {RESET}")
+                if choice == "1":
+                    self.create_ssh_user()
+                elif choice == "2":
+                    self.renew_ssh_user()
+                elif choice == "3":
+                    self.reset_user_password()
+                elif choice == "4":
+                    self.reset_user_bandwidth_quota()
+                elif choice == "5":
+                    self.delete_ssh_user()
+                elif choice == "6":
+                    self.lock_unlock_user()
+                elif choice == "7":
+                    self.list_users()
+                elif choice == "8":
+                    self.export_client_config()
+                elif choice == "9":
+                    self.online_users_inspector()
+                elif choice == "10":
+                    self.check_health()
+                elif choice == "11":
+                    self.restart_services()
+                elif choice == "12":
+                    self.domain_ssl_manager()
+                elif choice == "13":
+                    self.speedtest()
+                elif choice == "14":
+                    self.private_backup()
+                elif choice in ("0", "q", "exit"):
+                    clear_screen()
+                    print(f"\n{GREEN}Exiting VexTunnel Menu. Goodbye!{RESET}\n")
+                    break
+                else:
+                    print(f"{RED}Invalid option!{RESET}")
+                    time.sleep(1)
+            except (KeyboardInterrupt, EOFError):
                 clear_screen()
-                print("Exiting VexTunnel Menu. Goodbye!")
+                print(f"\n{GREEN}Exiting VexTunnel Menu. Goodbye!{RESET}\n")
                 break
-            else:
-                print(f"{RED}Invalid option!{RESET}")
-                time.sleep(1)
 
 if __name__ == "__main__":
     menu = VexTunnelMenu()
