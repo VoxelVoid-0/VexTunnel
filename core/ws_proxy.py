@@ -22,7 +22,9 @@ import ssl
 import socket
 import base64
 import hashlib
-from typing import Dict, Optional
+import time
+from collections import deque
+from typing import Dict, Optional, Tuple
 
 # Configure logging
 logging.basicConfig(
@@ -94,9 +96,86 @@ def configure_socket(sock: socket.socket):
     except Exception as e:
         logger.debug(f"Socket tuning warning: {e}")
 
+def extract_ip(peername) -> str:
+    """Safely extract IP string from socket peername tuple or string."""
+    if isinstance(peername, (tuple, list)) and len(peername) > 0:
+        return str(peername[0])
+    elif peername:
+        return str(peername)
+    return "unknown"
+
+class IPRateLimiter:
+    """
+    Sliding-window per-IP rate limiter and concurrency guard.
+    - Limits concurrent connections per IP (default: 32)
+    - Limits connection rate per IP (default: 20 conns per 5.0s window)
+    - Automatically prunes expired IP records to prevent memory leaks
+    """
+    def __init__(self, max_conns_per_ip: int = 32, max_rate: int = 20, rate_window_sec: float = 5.0):
+        self.max_conns_per_ip = max_conns_per_ip
+        self.max_rate = max_rate
+        self.rate_window_sec = rate_window_sec
+        self.active_conns: Dict[str, int] = {}
+        self.history: Dict[str, deque] = {}
+        self.last_cleanup = time.time()
+
+    def acquire(self, ip: str) -> Tuple[bool, str]:
+        """
+        Check if client IP is permitted to connect.
+        Returns (True, "") if allowed, or (False, reason) if rejected.
+        """
+        if ip == "unknown":
+            return True, ""
+
+        now = time.time()
+
+        # Periodic cleanup of idle IPs every 60s
+        if now - self.last_cleanup > 60.0:
+            self._cleanup(now)
+
+        # 1. Check concurrent connections per IP
+        current_conns = self.active_conns.get(ip, 0)
+        if current_conns >= self.max_conns_per_ip:
+            return False, f"Max concurrent connections reached for IP {ip} ({current_conns}/{self.max_conns_per_ip})"
+
+        # 2. Check connection arrival rate (sliding window)
+        timestamps = self.history.setdefault(ip, deque())
+        cutoff = now - self.rate_window_sec
+        while timestamps and timestamps[0] < cutoff:
+            timestamps.popleft()
+
+        if len(timestamps) >= self.max_rate:
+            return False, f"Connection rate limit exceeded for IP {ip} ({len(timestamps)} in {self.rate_window_sec}s)"
+
+        # Record admission
+        timestamps.append(now)
+        self.active_conns[ip] = current_conns + 1
+        return True, ""
+
+    def release(self, ip: str):
+        """Release active connection count for IP upon socket closure."""
+        if ip in self.active_conns:
+            self.active_conns[ip] -= 1
+            if self.active_conns[ip] <= 0:
+                del self.active_conns[ip]
+
+    def _cleanup(self, now: float):
+        self.last_cleanup = now
+        cutoff = now - self.rate_window_sec
+        stale_ips = []
+        for ip, timestamps in self.history.items():
+            while timestamps and timestamps[0] < cutoff:
+                timestamps.popleft()
+            if not timestamps and ip not in self.active_conns:
+                stale_ips.append(ip)
+        for ip in stale_ips:
+            self.history.pop(ip, None)
+
 class SSHWebSocketProxy:
     def __init__(self, listen_host: str, listen_port: int, target_host: str, target_port: int,
-                 response_code: int = 101, ssl_cert: str = None, ssl_key: str = None, max_conns: int = 2048):
+                 response_code: int = 101, ssl_cert: str = None, ssl_key: str = None,
+                 max_conns: int = 2048, max_conns_per_ip: int = 32, max_rate: int = 20,
+                 rate_limiter: Optional[IPRateLimiter] = None):
         self.listen_host = listen_host
         self.listen_port = listen_port
         self.target_host = target_host
@@ -106,6 +185,7 @@ class SSHWebSocketProxy:
         self.ssl_key = ssl_key
         self.max_conns = max_conns
         self.semaphore = asyncio.Semaphore(max_conns)
+        self.rate_limiter = rate_limiter or IPRateLimiter(max_conns_per_ip=max_conns_per_ip, max_rate=max_rate)
         self.active_connections = 0
 
     def build_handshake_response(self, client_key: Optional[str] = None) -> bytes:
@@ -123,167 +203,178 @@ class SSHWebSocketProxy:
 
     async def handle_client(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter):
         client_addr = client_writer.get_extra_info('peername')
-        
-        # 1. Connection Admission Gate
+        client_ip = extract_ip(client_addr)
+
+        # 1. Global Connection Admission Gate
         if self.semaphore.locked():
             logger.warning(f"Connection budget exhausted ({self.max_conns}). Rejecting client from {client_addr}")
             client_writer.close()
             return
 
-        async with self.semaphore:
-            self.active_connections += 1
-            logger.info(f"Accepted connection from {client_addr} (Active: {self.active_connections}/{self.max_conns})")
+        # 2. Per-IP Anti-Abuse Rate Limiter Gate
+        allowed, reason = self.rate_limiter.acquire(client_ip)
+        if not allowed:
+            logger.warning(f"[RateLimiter] Rejecting client {client_addr}: {reason}")
+            client_writer.close()
+            return
 
-            # Apply kernel socket tuning to client socket
-            client_sock = client_writer.get_extra_info('socket')
-            if client_sock:
-                configure_socket(client_sock)
+        try:
+            async with self.semaphore:
+                self.active_connections += 1
+                logger.info(f"Accepted connection from {client_addr} (Active: {self.active_connections}/{self.max_conns}, IP conns: {self.rate_limiter.active_conns.get(client_ip, 1)})")
 
-            target_writer = None
-            try:
-                # 2. Dynamic Streaming Handshake Reader (Anti-Fragmentation & Slowloris Watchdog)
-                header_buffer = bytearray()
+                # Apply kernel socket tuning to client socket
+                client_sock = client_writer.get_extra_info('socket')
+                if client_sock:
+                    configure_socket(client_sock)
 
-                async def read_header_stream():
-                    nonlocal header_buffer
-                    while True:
-                        chunk = await client_reader.read(4096)
-                        if not chunk:
-                            break
-                        header_buffer.extend(chunk)
-                        if b"\r\n\r\n" in header_buffer or b"\n\n" in header_buffer:
-                            break
-                        if len(header_buffer) >= MAX_HEADER_SIZE:
-                            break
-
+                target_writer = None
                 try:
-                    await asyncio.wait_for(read_header_stream(), timeout=HANDSHAKE_TIMEOUT)
-                except asyncio.TimeoutError:
-                    logger.warning(f"Slowloris watchdog: Handshake timeout ({HANDSHAKE_TIMEOUT}s) from {client_addr}. Closing socket.")
-                    return
+                    # 3. Dynamic Streaming Handshake Reader (Anti-Fragmentation & Slowloris Watchdog)
+                    header_buffer = bytearray()
 
-                initial_data = bytes(header_buffer)
-                if not initial_data:
-                    logger.warning(f"Empty handshake received from {client_addr}")
-                    return
+                    async def read_header_stream():
+                        nonlocal header_buffer
+                        while True:
+                            chunk = await client_reader.read(4096)
+                            if not chunk:
+                                break
+                            header_buffer.extend(chunk)
+                            if b"\r\n\r\n" in header_buffer or b"\n\n" in header_buffer:
+                                break
+                            if len(header_buffer) >= MAX_HEADER_SIZE:
+                                break
 
-                # Detect HTTP handshake verbs
-                stripped = initial_data.lstrip()
-                is_http = any(stripped.startswith(prefix) for prefix in HTTP_PREFIXES)
-                logger.info(f"Handshake from {client_addr} ({len(initial_data)} bytes, is_http={is_http}): {repr(initial_data[:80])}")
-
-                client_key = None
-                if is_http:
-                    headers = parse_http_headers(initial_data)
-                    ws_version = headers.get("sec-websocket-version")
-
-                    # RFC 6455 Check: If Sec-WebSocket-Version is present, ensure it is 13
-                    if ws_version and ws_version.strip() != "13":
-                        logger.warning(f"Unsupported Sec-WebSocket-Version '{ws_version}' from {client_addr}. Responding 426.")
-                        client_writer.write(b"HTTP/1.1 426 Upgrade Required\r\nSec-WebSocket-Version: 13\r\nContent-Type: text/plain\r\n\r\nUpgrade Required: WebSocket Version 13\r\n")
-                        await client_writer.drain()
+                    try:
+                        await asyncio.wait_for(read_header_stream(), timeout=HANDSHAKE_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Slowloris watchdog: Handshake timeout ({HANDSHAKE_TIMEOUT}s) from {client_addr}. Closing socket.")
                         return
 
-                    client_key = headers.get("sec-websocket-key")
+                    initial_data = bytes(header_buffer)
+                    if not initial_data:
+                        logger.warning(f"Empty handshake received from {client_addr}")
+                        return
 
-                # 3. Connect to backend SSH daemon (e.g. Dropbear 127.0.0.1:109) only after validation
-                target_reader, target_writer = await asyncio.open_connection(
-                    self.target_host, self.target_port
-                )
-                target_sock = target_writer.get_extra_info('socket')
-                if target_sock:
-                    configure_socket(target_sock)
+                    # Detect HTTP handshake verbs
+                    stripped = initial_data.lstrip()
+                    is_http = any(stripped.startswith(prefix) for prefix in HTTP_PREFIXES)
+                    logger.info(f"Handshake from {client_addr} ({len(initial_data)} bytes, is_http={is_http}): {repr(initial_data[:80])}")
 
-                if is_http:
-                    # Send HTTP 101/200 Handshake response to mobile client (RFC 6455 dynamic token)
-                    response = self.build_handshake_response(client_key=client_key)
-                    client_writer.write(response)
-                    await client_writer.drain()
-                    logger.info(f"Completed HTTP handshake with {client_addr} (RFC key dynamic accept: {bool(client_key)})")
+                    client_key = None
+                    if is_http:
+                        headers = parse_http_headers(initial_data)
+                        ws_version = headers.get("sec-websocket-version")
 
-                    # Extract any pipelined SSH banner bytes arriving in the initial packet
-                    last_crlf = initial_data.rfind(b"\r\n\r\n")
-                    if last_crlf != -1:
-                        ssh_initial_bytes = initial_data[last_crlf + 4:]
+                        # RFC 6455 Check: If Sec-WebSocket-Version is present, ensure it is 13
+                        if ws_version and ws_version.strip() != "13":
+                            logger.warning(f"Unsupported Sec-WebSocket-Version '{ws_version}' from {client_addr}. Responding 426.")
+                            client_writer.write(b"HTTP/1.1 426 Upgrade Required\r\nSec-WebSocket-Version: 13\r\nContent-Type: text/plain\r\n\r\nUpgrade Required: WebSocket Version 13\r\n")
+                            await client_writer.drain()
+                            return
+
+                        client_key = headers.get("sec-websocket-key")
+
+                    # 3. Connect to backend SSH daemon (e.g. Dropbear 127.0.0.1:109) only after validation
+                    target_reader, target_writer = await asyncio.open_connection(
+                        self.target_host, self.target_port
+                    )
+                    target_sock = target_writer.get_extra_info('socket')
+                    if target_sock:
+                        configure_socket(target_sock)
+
+                    if is_http:
+                        # Send HTTP 101/200 Handshake response to mobile client (RFC 6455 dynamic token)
+                        response = self.build_handshake_response(client_key=client_key)
+                        client_writer.write(response)
+                        await client_writer.drain()
+                        logger.info(f"Completed HTTP handshake with {client_addr} (RFC key dynamic accept: {bool(client_key)})")
+
+                        # Extract any pipelined SSH banner bytes arriving in the initial packet
+                        last_crlf = initial_data.rfind(b"\r\n\r\n")
+                        if last_crlf != -1:
+                            ssh_initial_bytes = initial_data[last_crlf + 4:]
+                        else:
+                            last_lf = initial_data.rfind(b"\n\n")
+                            ssh_initial_bytes = initial_data[last_lf + 2:] if last_lf != -1 else b""
+
+                        if ssh_initial_bytes:
+                            logger.info(f"Forwarding {len(ssh_initial_bytes)} pipelined SSH bytes to Dropbear: {repr(ssh_initial_bytes[:50])}")
+                            target_writer.write(ssh_initial_bytes)
+                            await target_writer.drain()
+                            ssh_started = True
+                        else:
+                            ssh_started = False
                     else:
-                        last_lf = initial_data.rfind(b"\n\n")
-                        ssh_initial_bytes = initial_data[last_lf + 2:] if last_lf != -1 else b""
-
-                    if ssh_initial_bytes:
-                        logger.info(f"Forwarding {len(ssh_initial_bytes)} pipelined SSH bytes to Dropbear: {repr(ssh_initial_bytes[:50])}")
-                        target_writer.write(ssh_initial_bytes)
+                        # Direct raw connection (non-WS fallback)
+                        target_writer.write(initial_data)
                         await target_writer.drain()
                         ssh_started = True
-                    else:
-                        ssh_started = False
-                else:
-                    # Direct raw connection (non-WS fallback)
-                    target_writer.write(initial_data)
-                    await target_writer.drain()
-                    ssh_started = True
 
-                # 4. Bi-Directional Asynchronous Stream Pipes with Backpressure Control
-                async def pipe_client_to_ssh():
-                    nonlocal ssh_started
-                    try:
-                        while True:
-                            data = await client_reader.read(BUFFER_SIZE)
-                            if not data:
-                                break
-
-                            # Filter out any multi-chunk HTTP noise before raw SSH stream starts
-                            if not ssh_started:
-                                s_data = data.lstrip()
-                                if any(s_data.startswith(p) for p in HTTP_PREFIXES):
-                                    logger.info(f"Absorbing fragmented HTTP noise from {client_addr} ({len(data)} bytes)")
-                                    continue
-                                else:
-                                    ssh_started = True
-
-                            target_writer.write(data)
-                            await target_writer.drain()
-                    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
-                        pass
-                    finally:
+                    # 4. Bi-Directional Asynchronous Stream Pipes with Backpressure Control
+                    async def pipe_client_to_ssh():
+                        nonlocal ssh_started
                         try:
-                            target_writer.close()
-                        except Exception:
-                            pass
+                            while True:
+                                data = await client_reader.read(BUFFER_SIZE)
+                                if not data:
+                                    break
 
-                async def pipe_ssh_to_client():
-                    try:
-                        while True:
-                            data = await target_reader.read(BUFFER_SIZE)
-                            if not data:
-                                break
-                            client_writer.write(data)
-                            await client_writer.drain()
-                    except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
-                        pass
-                    finally:
+                                # Filter out any multi-chunk HTTP noise before raw SSH stream starts
+                                if not ssh_started:
+                                    s_data = data.lstrip()
+                                    if any(s_data.startswith(p) for p in HTTP_PREFIXES):
+                                        logger.info(f"Absorbing fragmented HTTP noise from {client_addr} ({len(data)} bytes)")
+                                        continue
+                                    else:
+                                        ssh_started = True
+
+                                target_writer.write(data)
+                                await target_writer.drain()
+                        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
+                            pass
+                        finally:
+                            try:
+                                target_writer.close()
+                            except Exception:
+                                pass
+
+                    async def pipe_ssh_to_client():
                         try:
-                            client_writer.close()
-                        except Exception:
+                            while True:
+                                data = await target_reader.read(BUFFER_SIZE)
+                                if not data:
+                                    break
+                                client_writer.write(data)
+                                await client_writer.drain()
+                        except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
                             pass
+                        finally:
+                            try:
+                                client_writer.close()
+                            except Exception:
+                                pass
 
-                task_c2s = asyncio.create_task(pipe_client_to_ssh())
-                task_s2c = asyncio.create_task(pipe_ssh_to_client())
+                    task_c2s = asyncio.create_task(pipe_client_to_ssh())
+                    task_s2c = asyncio.create_task(pipe_ssh_to_client())
 
-                await asyncio.wait([task_c2s, task_s2c], return_when=asyncio.FIRST_COMPLETED)
+                    await asyncio.wait([task_c2s, task_s2c], return_when=asyncio.FIRST_COMPLETED)
 
-            except Exception as e:
-                logger.debug(f"Connection exception from {client_addr}: {e}")
-            finally:
-                self.active_connections -= 1
-                logger.info(f"Terminated session for {client_addr} (Active: {self.active_connections})")
+                except Exception as e:
+                    logger.debug(f"Connection exception from {client_addr}: {e}")
+                finally:
+                    self.active_connections -= 1
+                    logger.info(f"Terminated session for {client_addr} (Active: {self.active_connections})")
 
-                # Close both streams cleanly
-                for writer in (client_writer, target_writer):
-                    if writer:
-                        try:
-                            writer.close()
-                        except Exception:
-                            pass
+                    # Close both streams cleanly
+                    for writer in (client_writer, target_writer):
+                        if writer:
+                            try:
+                                writer.close()
+                            except Exception:
+                                pass
+        finally:
+            self.rate_limiter.release(client_ip)
 
     async def start(self):
         ssl_ctx = None
@@ -315,6 +406,8 @@ def main():
     parser.add_argument("--ssl-cert", default=None, help="Path to SSL certificate file")
     parser.add_argument("--ssl-key", default=None, help="Path to SSL private key file")
     parser.add_argument("--max-conns", type=int, default=2048, help="Maximum concurrent connections admission limit (default: 2048)")
+    parser.add_argument("--max-conns-per-ip", type=int, default=32, help="Maximum concurrent connections per client IP (default: 32)")
+    parser.add_argument("--max-rate", type=int, default=20, help="Maximum new connections per client IP in 5s window (default: 20)")
 
     args = parser.parse_args()
 
@@ -326,7 +419,9 @@ def main():
         response_code=args.response_code,
         ssl_cert=args.ssl_cert,
         ssl_key=args.ssl_key,
-        max_conns=args.max_conns
+        max_conns=args.max_conns,
+        max_conns_per_ip=args.max_conns_per_ip,
+        max_rate=args.max_rate
     )
 
     try:

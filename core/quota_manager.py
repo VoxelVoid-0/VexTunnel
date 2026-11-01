@@ -96,6 +96,45 @@ def init_firewall_chains() -> bool:
         logger.debug(f"Failed to initialize dedicated firewall chains: {e}")
         return False
 
+def setup_anti_abuse_firewall(ports: list = None, rate_per_min: int = 60, burst: int = 40) -> bool:
+    """
+    Configure kernel-level connection rate limiting on tunnel ports using iptables hashlimit.
+    Protects against SYN flooding and brute-force connection exhaustion without affecting ongoing streams.
+    """
+    if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
+        return False
+    if ports is None:
+        ports = [80, 443, 109, 22]
+    try:
+        check_mod = subprocess.run(["iptables", "-m", "hashlimit", "--help"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check_mod.returncode != 0:
+            return False
+
+        subprocess.run(["iptables", "-N", "VEXTUNNEL_LIMIT"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        check_limit = subprocess.run(["iptables", "-C", "INPUT", "-j", "VEXTUNNEL_LIMIT"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check_limit.returncode != 0:
+            subprocess.run(["iptables", "-I", "INPUT", "1", "-j", "VEXTUNNEL_LIMIT"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        for p in ports:
+            rule_check = subprocess.run(
+                ["iptables", "-C", "VEXTUNNEL_LIMIT", "-p", "tcp", "--dport", str(p), "-m", "conntrack", "--ctstate", "NEW",
+                 "-m", "hashlimit", "--hashlimit-above", f"{rate_per_min}/min", "--hashlimit-burst", str(burst),
+                 "--hashlimit-mode", "srcip", "--hashlimit-name", f"vex_limit_{p}", "-j", "DROP"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            if rule_check.returncode != 0:
+                subprocess.run(
+                    ["iptables", "-A", "VEXTUNNEL_LIMIT", "-p", "tcp", "--dport", str(p), "-m", "conntrack", "--ctstate", "NEW",
+                     "-m", "hashlimit", "--hashlimit-above", f"{rate_per_min}/min", "--hashlimit-burst", str(burst),
+                     "--hashlimit-mode", "srcip", "--hashlimit-name", f"vex_limit_{p}", "-j", "DROP"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+        logger.info(f"Firewall: Initialized VEXTUNNEL_LIMIT anti-abuse rate protection on ports {ports}")
+        return True
+    except Exception as e:
+        logger.debug(f"Failed to setup anti-abuse firewall: {e}")
+        return False
+
 def setup_accounting_rule(uid: int) -> bool:
     """Ensure iptables VEXTUNNEL_QUOTA rule exists for this UID to count outgoing traffic."""
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
