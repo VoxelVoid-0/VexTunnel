@@ -18,7 +18,8 @@ class TestInstaller(unittest.TestCase):
             os.path.join(self.base_dir, "install", "install_ssl.sh"),
             os.path.join(self.base_dir, "install", "install_ws.sh"),
             os.path.join(self.base_dir, "install", "install_badvpn.sh"),
-            os.path.join(self.base_dir, "install", "install_cron.sh")
+            os.path.join(self.base_dir, "install", "install_cron.sh"),
+            os.path.join(self.base_dir, "install", "uninstall.sh")
         ]
 
     def test_all_scripts_exist_with_shebang(self):
