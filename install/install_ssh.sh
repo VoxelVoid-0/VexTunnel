@@ -20,7 +20,7 @@ sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_
 
 # Harden OpenSSH session & keepalive limits
 sed -i '/^MaxSessions/d' /etc/ssh/sshd_config 2>/dev/null || true
-echo "MaxSessions 2" >> /etc/ssh/sshd_config
+echo "MaxSessions 10" >> /etc/ssh/sshd_config
 sed -i '/^ClientAliveInterval/d' /etc/ssh/sshd_config 2>/dev/null || true
 echo "ClientAliveInterval 120" >> /etc/ssh/sshd_config
 sed -i '/^ClientAliveCountMax/d' /etc/ssh/sshd_config 2>/dev/null || true
@@ -31,7 +31,12 @@ if [ -f /etc/security/limits.conf ] && ! grep -q "maxlogins" /etc/security/limit
     echo "* hard maxlogins 4" >> /etc/security/limits.conf
 fi
 
-systemctl restart ssh
+# Reload systemd and restart SSH service and socket (for Ubuntu 22.04+ socket activation)
+systemctl daemon-reload 2>/dev/null || true
+if systemctl is-active --quiet ssh.socket 2>/dev/null; then
+    systemctl restart ssh.socket 2>/dev/null || true
+fi
+systemctl restart ssh 2>/dev/null || true
 
 # 3. Configure Dropbear Ports (109, 143)
 cat <<'EOF' > /etc/default/dropbear
