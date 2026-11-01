@@ -17,12 +17,26 @@ class TestUserManager(unittest.TestCase):
         self.mgr = UserManager(db_path=self.temp_db.name)
 
     def tearDown(self):
+        # Clean up temporary Linux system users created during root tests
+        for u in ["testuser1", "dupuser", "renewuser", "activeuser", "expireduser", "deluser", "authuser", "quotauser"]:
+            try:
+                self.mgr.delete_user(u)
+            except Exception:
+                pass
+
         # Clean up temporary database file
         if os.path.exists(self.temp_db.name):
             try:
                 os.remove(self.temp_db.name)
             except OSError:
                 pass
+        for ext in ["-wal", "-shm"]:
+            sidecar = self.temp_db.name + ext
+            if os.path.exists(sidecar):
+                try:
+                    os.remove(sidecar)
+                except OSError:
+                    pass
 
     def test_database_initialization(self):
         """Verify SQLite table schema is properly created."""
