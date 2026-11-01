@@ -110,7 +110,15 @@ ufw allow 80/tcp >/dev/null 2>&1 || true
 ufw allow 443/tcp >/dev/null 2>&1 || true
 ufw allow 8880/tcp >/dev/null 2>&1 || true
 ufw allow 7100:7300/udp >/dev/null 2>&1 || true
+ufw allow 7100:7300/tcp >/dev/null 2>&1 || true
 ufw --force enable >/dev/null 2>&1 || true
+
+# Purge cloud-image pre-existing REJECT rules that intercept traffic before UFW (e.g. Oracle Cloud OCI)
+iptables -D INPUT -j REJECT --reject-with icmp-host-prohibited 2>/dev/null || true
+iptables -D FORWARD -j REJECT --reject-with icmp-host-prohibited 2>/dev/null || true
+if [ -f /etc/iptables/rules.v4 ]; then
+    sed -i '/icmp-host-prohibited/d' /etc/iptables/rules.v4 2>/dev/null || true
+fi
 
 # 8. Auto-Launch Menu Shortcut in .bashrc
 if ! grep -q "alias menu=" /root/.bashrc 2>/dev/null; then
