@@ -18,8 +18,8 @@ if [ "${EUID}" -ne 0 ]; then
 fi
 
 echo -e "${YELLOW}${BOLD}==> Stopping and disabling all VexTunnel background services...${NC}"
-systemctl stop vextunnel-ws vextunnel-wss vextunnel-enforcer badvpn-7300 badvpn-7200 badvpn-7100 2>/dev/null || true
-systemctl disable vextunnel-ws vextunnel-wss vextunnel-enforcer badvpn-7300 badvpn-7200 badvpn-7100 2>/dev/null || true
+systemctl stop vextunnel-ws vextunnel-wss vextunnel-enforcer vextunnel-expiry.timer vextunnel-quota-reset.timer badvpn-7300 badvpn-7200 badvpn-7100 2>/dev/null || true
+systemctl disable vextunnel-ws vextunnel-wss vextunnel-enforcer vextunnel-expiry.timer vextunnel-quota-reset.timer badvpn-7300 badvpn-7200 badvpn-7100 2>/dev/null || true
 
 echo -e "${YELLOW}==> Removing systemd service units...${NC}"
 rm -f /etc/systemd/system/vextunnel* /etc/systemd/system/badvpn*

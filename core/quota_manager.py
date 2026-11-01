@@ -30,6 +30,7 @@ logger = logging.getLogger("QuotaManager")
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.user_manager import DEFAULT_DB_PATH
+from core.telegram_notifier import alert_quota_threshold, alert_quota_exceeded
 
 def format_bytes(num_bytes: int) -> str:
     """Format bytes into human-readable string (KB, MB, GB, TB)."""
@@ -284,39 +285,75 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
                 new_used = current_used + delta
                 new_last_counter = iptables_bytes
 
-                # Quota Exceeded Enforcement
-                if quota > 0 and new_used >= quota:
-                    quota_status = "quota_exceeded"
-                    status = "quota_exceeded"
-                    if "last_counter_bytes" in cols and has_quota_status:
+            last_alert = u["last_quota_alert_pct"] if "last_quota_alert_pct" in cols and u["last_quota_alert_pct"] is not None else 0
+            has_last_alert = "last_quota_alert_pct" in cols
+            pct = int((new_used / quota) * 100) if quota > 0 else 0
+
+            # Quota Exceeded Enforcement
+            if quota > 0 and new_used >= quota:
+                quota_status = "quota_exceeded"
+                status = "quota_exceeded"
+                if "last_counter_bytes" in cols and has_quota_status:
+                    if has_last_alert:
+                        conn.execute("""
+                            UPDATE users SET used_bytes = ?, last_counter_bytes = ?, last_quota_alert_pct = 100, quota_status = 'quota_exceeded', status = 'quota_exceeded', last_quota_sync = ?
+                            WHERE username = ?
+                        """, (new_used, new_last_counter, now_str, uname))
+                    else:
                         conn.execute("""
                             UPDATE users SET used_bytes = ?, last_counter_bytes = ?, quota_status = 'quota_exceeded', status = 'quota_exceeded', last_quota_sync = ?
                             WHERE username = ?
                         """, (new_used, new_last_counter, now_str, uname))
-                    elif has_quota_status:
-                        conn.execute("""
-                            UPDATE users SET used_bytes = ?, quota_status = 'quota_exceeded', status = 'quota_exceeded', last_quota_sync = ?
-                            WHERE username = ?
-                        """, (new_used, now_str, uname))
-                    else:
-                        conn.execute("UPDATE users SET used_bytes = ?, status = 'quota_exceeded' WHERE username = ?", (new_used, uname))
-                    block_user_network(uid)
-                    kill_user_sessions(uname)
+                elif has_quota_status:
+                    conn.execute("""
+                        UPDATE users SET used_bytes = ?, quota_status = 'quota_exceeded', status = 'quota_exceeded', last_quota_sync = ?
+                        WHERE username = ?
+                    """, (new_used, now_str, uname))
                 else:
-                    if delta > 0 or new_last_counter != last_counter:
-                        if "last_counter_bytes" in cols and has_quota_status:
+                    conn.execute("UPDATE users SET used_bytes = ?, status = 'quota_exceeded' WHERE username = ?", (new_used, uname))
+                block_user_network(uid)
+                kill_user_sessions(uname)
+
+                if last_alert < 100:
+                    try:
+                        alert_quota_exceeded(uname, new_used, quota)
+                    except Exception:
+                        pass
+            else:
+                new_alert_val = last_alert
+                if quota > 0 and pct >= 90 and last_alert < 90:
+                    try:
+                        alert_quota_threshold(uname, new_used, quota, 90)
+                    except Exception:
+                        pass
+                    new_alert_val = 90
+                elif quota > 0 and pct >= 80 and last_alert < 80:
+                    try:
+                        alert_quota_threshold(uname, new_used, quota, 80)
+                    except Exception:
+                        pass
+                    new_alert_val = 80
+
+                if delta > 0 or new_last_counter != last_counter or new_alert_val != last_alert:
+                    if "last_counter_bytes" in cols and has_quota_status:
+                        if has_last_alert:
+                            conn.execute("""
+                                UPDATE users SET used_bytes = ?, last_counter_bytes = ?, last_quota_alert_pct = ?, last_quota_sync = ?
+                                WHERE username = ?
+                            """, (new_used, new_last_counter, new_alert_val, now_str, uname))
+                        else:
                             conn.execute("""
                                 UPDATE users SET used_bytes = ?, last_counter_bytes = ?, last_quota_sync = ?
                                 WHERE username = ?
                             """, (new_used, new_last_counter, now_str, uname))
-                        elif has_quota_status:
-                            conn.execute("""
-                                UPDATE users SET used_bytes = ?, last_quota_sync = ?
-                                WHERE username = ?
-                            """, (new_used, now_str, uname))
-                        else:
-                            conn.execute("UPDATE users SET used_bytes = ? WHERE username = ?", (new_used, uname))
-                    current_used = new_used
+                    elif has_quota_status:
+                        conn.execute("""
+                            UPDATE users SET used_bytes = ?, last_quota_sync = ?
+                            WHERE username = ?
+                        """, (new_used, now_str, uname))
+                    else:
+                        conn.execute("UPDATE users SET used_bytes = ? WHERE username = ?", (new_used, uname))
+                current_used = new_used
 
             summary[uname] = {
                 "quota_bytes": quota,
@@ -340,13 +377,20 @@ def reset_user_quota(username: str, db_path: str = DEFAULT_DB_PATH) -> bool:
         conn = sqlite3.connect(db_path, timeout=10.0)
         cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
         has_last_counter = "last_counter_bytes" in cols
+        has_last_alert = "last_quota_alert_pct" in cols
         has_quota_status = "quota_status" in cols
 
         if has_last_counter and has_quota_status:
-            cur = conn.execute("""
-                UPDATE users SET used_bytes = 0, last_counter_bytes = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
-                WHERE username = ?
-            """, (now_str, username))
+            if has_last_alert:
+                cur = conn.execute("""
+                    UPDATE users SET used_bytes = 0, last_counter_bytes = 0, last_quota_alert_pct = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
+                    WHERE username = ?
+                """, (now_str, username))
+            else:
+                cur = conn.execute("""
+                    UPDATE users SET used_bytes = 0, last_counter_bytes = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
+                    WHERE username = ?
+                """, (now_str, username))
         elif has_quota_status:
             cur = conn.execute("""
                 UPDATE users SET used_bytes = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
@@ -372,4 +416,108 @@ def reset_user_quota(username: str, db_path: str = DEFAULT_DB_PATH) -> bool:
     except Exception as e:
         logger.error(f"Failed to reset quota for {username}: {e}")
         return False
+
+def reset_all_quotas(db_path: str = DEFAULT_DB_PATH) -> int:
+    """
+    Automated scheduled/monthly quota reset:
+    Zeroes bandwidth counters and unblocks network access for all users.
+    Returns count of reset users.
+    """
+    count = 0
+    try:
+        conn = sqlite3.connect(db_path, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        users = conn.execute("SELECT username FROM users").fetchall()
+        conn.close()
+        for u in users:
+            uname = u["username"]
+            if reset_user_quota(uname, db_path):
+                count += 1
+        logger.info(f"Automated scheduled reset completed for {count} users.")
+        if count > 0:
+            try:
+                from core.telegram_notifier import alert_all_quotas_reset
+                alert_all_quotas_reset(count)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.error(f"Error in reset_all_quotas: {e}")
+    return count
+
+RESET_SERVICE_PATH = "/etc/systemd/system/vextunnel-quota-reset.service"
+RESET_TIMER_PATH = "/etc/systemd/system/vextunnel-quota-reset.timer"
+
+def is_monthly_quota_reset_enabled() -> bool:
+    """Check if monthly quota reset systemd timer is active and enabled."""
+    if os.name == 'nt':
+        return False
+    if not os.path.exists(RESET_TIMER_PATH):
+        return False
+    try:
+        res = subprocess.run(["systemctl", "is-enabled", "vextunnel-quota-reset.timer"], capture_output=True, text=True, check=False)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+def setup_monthly_quota_reset_timer(enable: bool = True) -> bool:
+    """Enable or disable automated systemd timer for monthly quota reset."""
+    if os.name == 'nt':
+        logger.warning("Systemd timers are not supported on Windows.")
+        return False
+
+    if not enable:
+        try:
+            subprocess.run(["systemctl", "disable", "--now", "vextunnel-quota-reset.timer"], capture_output=True, check=False)
+            if os.path.exists(RESET_TIMER_PATH):
+                os.remove(RESET_TIMER_PATH)
+            if os.path.exists(RESET_SERVICE_PATH):
+                os.remove(RESET_SERVICE_PATH)
+            subprocess.run(["systemctl", "daemon-reload"], capture_output=True, check=False)
+            logger.info("Automated monthly quota reset timer disabled.")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to disable monthly reset timer: {e}")
+            return False
+
+    service_content = """[Unit]
+Description=VexTunnel Monthly Bandwidth Quota Reset
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/quota_manager.py reset-all
+"""
+
+    timer_content = """[Unit]
+Description=Monthly Timer for VexTunnel Bandwidth Quota Reset
+
+[Timer]
+OnCalendar=*-*-01 00:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+"""
+    try:
+        with open(RESET_SERVICE_PATH, "w") as f:
+            f.write(service_content)
+        with open(RESET_TIMER_PATH, "w") as f:
+            f.write(timer_content)
+        subprocess.run(["systemctl", "daemon-reload"], capture_output=True, check=False)
+        subprocess.run(["systemctl", "enable", "--now", "vextunnel-quota-reset.timer"], capture_output=True, check=False)
+        logger.info("Automated monthly quota reset timer enabled successfully.")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to enable monthly reset timer: {e}")
+        return False
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "reset-all":
+        res = reset_all_quotas()
+        print(f"SUCCESS: Reset bandwidth quotas for {res} users.")
+    else:
+        sync = sync_all_quotas()
+        print("VexTunnel Quota Sync Summary:")
+        for u, inf in sync.items():
+            print(f" {u:<16}: Used {format_bytes(inf['used_bytes'])} / {format_bytes(inf['quota_bytes'])} [{inf['quota_status'].upper()}]")
 

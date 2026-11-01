@@ -301,6 +301,11 @@ class ServiceWatchdog:
         if success:
             self.restart_history[service_name].append(now)
             logger.info(f"Self-Healing: Service '{service_name}' successfully recovered and restarted.")
+            try:
+                from core.telegram_notifier import alert_service_recovered
+                alert_service_recovered(service_name)
+            except Exception:
+                pass
 
         return {
             "service": service_name,

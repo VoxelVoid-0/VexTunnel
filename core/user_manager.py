@@ -91,6 +91,7 @@ class UserManager:
                     quota_bytes INTEGER DEFAULT 0,
                     used_bytes INTEGER DEFAULT 0,
                     last_counter_bytes INTEGER DEFAULT 0,
+                    last_quota_alert_pct INTEGER DEFAULT 0,
                     quota_status TEXT DEFAULT 'active',
                     last_quota_sync TIMESTAMP,
                     status TEXT DEFAULT 'active'
@@ -183,6 +184,8 @@ class UserManager:
                 conn.execute("ALTER TABLE users ADD COLUMN used_bytes INTEGER DEFAULT 0")
             if "last_counter_bytes" not in cols_after:
                 conn.execute("ALTER TABLE users ADD COLUMN last_counter_bytes INTEGER DEFAULT 0")
+            if "last_quota_alert_pct" not in cols_after:
+                conn.execute("ALTER TABLE users ADD COLUMN last_quota_alert_pct INTEGER DEFAULT 0")
             if "quota_status" not in cols_after:
                 conn.execute("ALTER TABLE users ADD COLUMN quota_status TEXT DEFAULT 'active'")
             if "last_quota_sync" not in cols_after:
@@ -380,6 +383,7 @@ class UserManager:
                     "quota_bytes": r["quota_bytes"],
                     "used_bytes": r["used_bytes"],
                     "last_counter_bytes": r["last_counter_bytes"] if "last_counter_bytes" in cols else 0,
+                    "last_quota_alert_pct": r["last_quota_alert_pct"] if "last_quota_alert_pct" in cols else 0,
                     "quota_status": r["quota_status"] if "quota_status" in cols else "active",
                     "last_quota_sync": r["last_quota_sync"] if "last_quota_sync" in cols else None,
                     "status": status
@@ -396,17 +400,23 @@ class UserManager:
         return users
 
     def cleanup_expired(self) -> int:
-        """Lock expired accounts safely."""
+        """Lock expired accounts safely and dispatch Telegram alert if configured."""
         count = 0
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._get_connection() as conn:
-            expired_users = conn.execute("SELECT username FROM users WHERE expires_at <= ? AND status = 'active'", (now,)).fetchall()
+            expired_users = conn.execute("SELECT username, expires_at FROM users WHERE expires_at <= ? AND status = 'active'", (now,)).fetchall()
             for row in expired_users:
                 uname = row["username"]
+                exp_at = row["expires_at"]
                 if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
                     subprocess.run(["passwd", "-l", uname], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 conn.execute("UPDATE users SET status = 'expired' WHERE username = ?", (uname,))
                 count += 1
+                try:
+                    from core.telegram_notifier import alert_account_expired
+                    alert_account_expired(uname, exp_at)
+                except Exception:
+                    pass
             conn.commit()
         return count
 

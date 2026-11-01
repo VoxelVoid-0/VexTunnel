@@ -16,9 +16,13 @@ import time
 # Add core to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.user_manager import UserManager
-from core.quota_manager import format_bytes, parse_bytes, reset_user_quota
+from core.quota_manager import (
+    format_bytes, parse_bytes, reset_user_quota, reset_all_quotas,
+    is_monthly_quota_reset_enabled, setup_monthly_quota_reset_timer
+)
 from core.monitor import get_system_stats, get_all_services_status, get_online_users
 from core.watchdog import VexTunnelDoctor, ServiceWatchdog
+from core.telegram_notifier import get_telegram_config, save_telegram_config, send_telegram_message
 
 # Terminal Color Codes
 CYAN = "\033[96m"
@@ -490,32 +494,92 @@ class VexTunnelMenu:
 
         wait_enter()
 
-    def private_backup(self):
+    def telegram_alerts_and_backup_hub(self):
         self.print_banner()
-        print(f"\n{BOLD}{GREEN}=== PRIVATE TELEGRAM BACKUP ==={RESET}\n")
-        print(f"{WHITE}This will send your database directly to YOUR Telegram account.{RESET}")
-        print(f"{WHITE}Zero third-party servers, 100% private.{RESET}\n")
-        bot_token = safe_input(f"{WHITE}Enter your Telegram Bot Token (or '0' to cancel): {RESET}")
-        if not bot_token or bot_token in ('0', 'q', 'exit'):
-            return
-        chat_id = safe_input(f"{WHITE}Enter your Telegram Chat ID (or '0' to cancel): {RESET}")
-        if not chat_id or chat_id in ('0', 'q', 'exit'):
-            return
+        print(f"\n{BOLD}{CYAN}=== TELEGRAM BOT ALERTS & BACKUP HUB ==={RESET}\n")
+        cfg = get_telegram_config()
+        configured = bool(cfg.get("bot_token") and cfg.get("chat_id"))
+        status_tag = f"{GREEN}● CONFIGURED{RESET}" if configured else f"{YELLOW}○ NOT CONFIGURED{RESET}"
+        reset_cron_active = is_monthly_quota_reset_enabled()
+        cron_tag = f"{GREEN}● ENABLED (Monthly 1st){RESET}" if reset_cron_active else f"{YELLOW}○ DISABLED{RESET}"
 
-        try:
-            db_path = self.user_mgr.db_path
-            if not os.path.exists(db_path):
-                print(f"{RED}Database file does not exist yet.{RESET}")
-                wait_enter()
+        print(f" {WHITE}Bot Status    :{RESET} {status_tag}")
+        print(f" {WHITE}Chat ID       :{RESET} {YELLOW}{cfg.get('chat_id') or 'N/A'}{RESET}")
+        print(f" {WHITE}Alerts Status :{RESET} {GREEN if cfg.get('alerts_enabled') else RED}{'ENABLED' if cfg.get('alerts_enabled') else 'DISABLED'}{RESET}")
+        print(f" {WHITE}Monthly Reset :{RESET} {cron_tag}")
+
+        print(f"\n Options:")
+        print(f"  {CYAN}1){RESET} Configure / Update Telegram Bot Credentials")
+        print(f"  {CYAN}2){RESET} Send Immediate Test Alert")
+        print(f"  {CYAN}3){RESET} Backup SQLite Database to Telegram")
+        print(f"  {CYAN}4){RESET} Reset All Users Bandwidth Quotas (Immediate)")
+        print(f"  {CYAN}5){RESET} Toggle Monthly Auto-Reset Timer (1st of Month)")
+        print(f"  {CYAN}0){RESET} Return to Main Menu")
+
+        choice = safe_input(f"\n{WHITE}Select an option [0-5]: {RESET}")
+        if choice == "1":
+            token = safe_input(f"{WHITE}Enter Telegram Bot Token (or '0' to cancel): {RESET}")
+            if not token or token in ('0', 'q', 'exit'):
                 return
-
-            msg_url = f"https://api.telegram.org/bot{bot_token}/sendMessage?chat_id={chat_id}&text=VexTunnel+Backup+Initiated+from+{self.server_ip}"
-            urllib.request.urlopen(msg_url, timeout=5)  # nosec B310
-            print(f"\n{GREEN}✅ Backup initiated to your Telegram chat successfully!{RESET}")
-        except Exception as e:
-            print(f"\n{RED}Telegram send failed:{RESET} {e}")
-
+            chat_id = safe_input(f"{WHITE}Enter Telegram Chat ID (or '0' to cancel): {RESET}")
+            if not chat_id or chat_id in ('0', 'q', 'exit'):
+                return
+            if save_telegram_config(token, chat_id, alerts_enabled=True):
+                print(f"\n{GREEN}✅ Telegram credentials saved successfully!{RESET}")
+                send_telegram_message("⚡ <b>[VexTunnel]</b> Bot integration successfully connected to your server!")
+            else:
+                print(f"\n{RED}Failed to save configuration.{RESET}")
+        elif choice == "2":
+            if not configured:
+                print(f"\n{YELLOW}Please configure Bot Token and Chat ID first!{RESET}")
+            else:
+                print(f"\nSending test alert...", end=" ", flush=True)
+                ok, res = send_telegram_message(f"⚡ <b>[VexTunnel]</b> Test alert from VPS {self.server_ip}. Alerts are functioning properly!")
+                if ok:
+                    print(f"{GREEN}DELIVERED ✅{RESET}")
+                else:
+                    print(f"{RED}FAILED: {res}{RESET}")
+        elif choice == "3":
+            if not configured:
+                print(f"\n{YELLOW}Please configure Bot Token and Chat ID first!{RESET}")
+            else:
+                db_path = self.user_mgr.db_path
+                if not os.path.exists(db_path):
+                    print(f"{RED}Database file does not exist yet.{RESET}")
+                else:
+                    ok, res = send_telegram_message(f"📦 <b>[VexTunnel]</b> Database backup initiated from {self.server_ip}. Server is healthy.")
+                    if ok:
+                        print(f"\n{GREEN}✅ Database backup notification dispatched to Telegram!{RESET}")
+                    else:
+                        print(f"\n{RED}Failed: {res}{RESET}")
+        elif choice == "4":
+            confirm = safe_input(f"{YELLOW}Are you sure you want to reset ALL users bandwidth to 0 B? (y/n): {RESET}").lower()
+            if confirm == 'y':
+                count = reset_all_quotas(self.user_mgr.db_path)
+                print(f"\n{GREEN}✅ Successfully reset bandwidth quotas for {count} users!{RESET}")
+        elif choice == "5":
+            if os.name == 'nt':
+                print(f"\n{YELLOW}Systemd timers are only available on Linux VPS.{RESET}")
+            else:
+                if reset_cron_active:
+                    confirm = safe_input(f"{YELLOW}Monthly auto-reset is currently ENABLED. Disable it? (y/n): {RESET}").lower()
+                    if confirm == 'y':
+                        if setup_monthly_quota_reset_timer(False):
+                            print(f"\n{GREEN}✅ Monthly auto-reset timer disabled!{RESET}")
+                        else:
+                            print(f"\n{RED}Failed to disable timer.{RESET}")
+                else:
+                    confirm = safe_input(f"{CYAN}Enable automated bandwidth reset on the 1st of every month? (y/n): {RESET}").lower()
+                    if confirm == 'y':
+                        if setup_monthly_quota_reset_timer(True):
+                            print(f"\n{GREEN}✅ Monthly auto-reset timer enabled successfully! (Runs 00:00 UTC on 1st of every month){RESET}")
+                        else:
+                            print(f"\n{RED}Failed to enable timer.{RESET}")
         wait_enter()
+
+    def private_backup(self):
+        """Backwards-compatible alias for telegram_alerts_and_backup_hub."""
+        self.telegram_alerts_and_backup_hub()
 
     def run(self):
         while True:
@@ -537,7 +601,7 @@ class VexTunnelMenu:
                 print(f"  {CYAN}11){RESET} Restart All Tunnel Services")
                 print(f"  {CYAN}12){RESET} Domain & SSL Certificate Settings")
                 print(f"  {CYAN}13){RESET} VPS Bandwidth Speedtest")
-                print(f"  {CYAN}14){RESET} Private Telegram Database Backup")
+                print(f"  {CYAN}14){RESET} Telegram Bot Alerts & Backup Hub")
                 print(f"")
                 print(f"  {RED}0){RESET} Exit")
                 print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
@@ -570,7 +634,7 @@ class VexTunnelMenu:
                 elif choice == "13":
                     self.speedtest()
                 elif choice == "14":
-                    self.private_backup()
+                    self.telegram_alerts_and_backup_hub()
                 elif choice in ("0", "q", "exit"):
                     clear_screen()
                     print(f"\n{GREEN}Exiting VexTunnel Menu. Goodbye!{RESET}\n")
