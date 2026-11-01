@@ -20,6 +20,9 @@ import sys
 import os
 import ssl
 import socket
+import base64
+import hashlib
+from typing import Dict, Optional
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +40,37 @@ HTTP_PREFIXES = (
     b"GET", b"POST", b"HEAD", b"CONNECT",
     b"PUT", b"DELETE", b"OPTIONS", b"PATCH", b"HTTP"
 )
+
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+def parse_http_headers(raw: bytes) -> Dict[str, str]:
+    """Parse HTTP headers from raw byte buffer into lowercase key-value dictionary."""
+    text = raw.decode("latin-1", errors="replace")
+    headers = {}
+    for line in text.split("\r\n"):
+        if not line:
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            headers[k.strip().lower()] = v.strip()
+        elif "\n" in line:
+            # Handle LF-only separated headers
+            for subline in line.split("\n"):
+                if ":" in subline:
+                    k, v = subline.split(":", 1)
+                    headers[k.strip().lower()] = v.strip()
+    return headers
+
+def compute_websocket_accept(client_key: str) -> str:
+    """Compute dynamic RFC 6455 Sec-WebSocket-Accept token from Sec-WebSocket-Key."""
+    if not client_key:
+        return "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+    magic = client_key.strip() + WS_GUID
+    try:
+        digest = hashlib.sha1(magic.encode("utf-8"), usedforsecurity=False).digest()  # nosec B324 - RFC 6455 requires SHA1
+    except TypeError:
+        digest = hashlib.sha1(magic.encode("utf-8")).digest()  # nosec B324 - RFC 6455 requires SHA1
+    return base64.b64encode(digest).decode("ascii")
 
 def configure_socket(sock: socket.socket):
     """Tune OS-level socket options for ultra-low latency & high throughput."""
@@ -74,15 +108,17 @@ class SSHWebSocketProxy:
         self.semaphore = asyncio.Semaphore(max_conns)
         self.active_connections = 0
 
-    def build_handshake_response(self) -> bytes:
-        """Generate appropriate HTTP response to complete the WebSocket handshake."""
+    def build_handshake_response(self, client_key: Optional[str] = None) -> bytes:
+        """Generate appropriate HTTP response to complete RFC 6455 WebSocket handshake."""
         if self.response_code == 200:
             return b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n"
+
+        accept_token = compute_websocket_accept(client_key) if client_key else "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
         return (
             b"HTTP/1.1 101 Switching Protocols\r\n"
             b"Upgrade: websocket\r\n"
             b"Connection: Upgrade\r\n"
-            b"Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n"
+            + f"Sec-WebSocket-Accept: {accept_token}\r\n\r\n".encode("ascii")
         )
 
     async def handle_client(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter):
@@ -145,11 +181,14 @@ class SSHWebSocketProxy:
                     configure_socket(target_sock)
 
                 if is_http:
-                    # Send HTTP 101/200 Handshake response to mobile client
-                    response = self.build_handshake_response()
+                    headers = parse_http_headers(initial_data)
+                    client_key = headers.get("sec-websocket-key")
+
+                    # Send HTTP 101/200 Handshake response to mobile client (RFC 6455 dynamic token)
+                    response = self.build_handshake_response(client_key=client_key)
                     client_writer.write(response)
                     await client_writer.drain()
-                    logger.info(f"Completed HTTP handshake with {client_addr}")
+                    logger.info(f"Completed HTTP handshake with {client_addr} (RFC key dynamic accept: {bool(client_key)})")
 
                     # Extract any pipelined SSH banner bytes arriving in the initial packet
                     last_crlf = initial_data.rfind(b"\r\n\r\n")
