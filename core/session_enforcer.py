@@ -29,6 +29,36 @@ from core.quota_manager import sync_all_quotas
 
 LOG_FILE = "/var/log/vextunnel/session.log"
 
+SYSTEM_USERS = {
+    "root", "ubuntu", "debian", "centos", "admin", "ec2-user", "fedora",
+    "rocky", "alma", "opc", "dropbear", "sshd", "daemon", "nobody",
+    "systemd-network", "systemd-resolve", "messagebus", "syslog", "_apt", "sync"
+}
+
+def is_system_or_admin_user(username: str) -> bool:
+    """Return True if username is an OS administrative or non-tunnel system account."""
+    if not username or username in SYSTEM_USERS:
+        return True
+    if os.name != 'nt':
+        try:
+            import pwd
+            entry = pwd.getpwnam(username)
+            if entry.pw_uid < 1000:
+                return True
+            # Non-restricted interactive shells indicate legitimate system administrators
+            restricted_shells = {"/bin/false", "/usr/sbin/nologin", "/bin/nologin"}
+            if entry.pw_shell not in restricted_shells:
+                return True
+            # Check groups for administrative roles
+            import grp
+            admin_groups = {"sudo", "wheel", "admin", "adm"}
+            for g in grp.getgrall():
+                if g.gr_name in admin_groups and username in g.gr_mem:
+                    return True
+        except (KeyError, ImportError, Exception):
+            pass
+    return False
+
 def get_active_user_sessions() -> dict:
     """
     Return dictionary of {username: [pid1, pid2, ...]} for active Dropbear and OpenSSH user sessions.
@@ -38,10 +68,6 @@ def get_active_user_sessions() -> dict:
         return {}
 
     user_pids = {}
-    system_users = {
-        "root", "dropbear", "sshd", "daemon", "nobody", "systemd-network",
-        "systemd-resolve", "messagebus", "syslog", "_apt", "sync"
-    }
 
     try:
         res = subprocess.run(["ps", "-eo", "user,pid,comm,args"], capture_output=True, text=True, timeout=5)
@@ -49,7 +75,7 @@ def get_active_user_sessions() -> dict:
             parts = line.split()
             if len(parts) >= 3:
                 uname = parts[0]
-                if uname in system_users or "grep" in line:
+                if uname in SYSTEM_USERS or is_system_or_admin_user(uname) or "grep" in line:
                     continue
                 try:
                     pid = int(parts[1])
@@ -125,10 +151,14 @@ def enforce_concurrency_limits(db_path: str = DEFAULT_DB_PATH) -> int:
 
         for username, pids in active_processes.items():
             user_info = user_limits.get(username)
-            # If user is expired, locked, quota exceeded, or not in DB, terminate all sessions
-            if not user_info or user_info["status"] != "active":
-                reason = user_info["status"] if user_info else "unregistered"
-                logger.warning(f"User '{username}' is [{reason}]. Terminating all {len(pids)} active sessions.")
+            # Never terminate accounts not managed by VexTunnel (e.g. system administrators, cloud users)
+            if not user_info:
+                continue
+
+            # If registered user is expired, locked, or quota exceeded, terminate all sessions
+            if user_info["status"] != "active":
+                reason = user_info["status"]
+                logger.warning(f"VexTunnel user '{username}' is [{reason}]. Terminating all {len(pids)} active sessions.")
                 for pid in pids:
                     try:
                         os.kill(pid, signal.SIGTERM)
