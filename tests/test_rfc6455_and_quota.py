@@ -167,9 +167,12 @@ class TestRFC6455AndQuota(unittest.TestCase):
 
         # Simulate exceeded quota
         conn = sqlite3.connect(self.db_path)
-        conn.execute("UPDATE users SET used_bytes = 2000, status = 'quota_exceeded' WHERE username = 'quotauser'")
+        conn.execute("UPDATE users SET used_bytes = 2000, quota_status = 'quota_exceeded', status = 'quota_exceeded' WHERE username = 'quotauser'")
         conn.commit()
         conn.close()
+
+        # Auth should be blocked while quota is exceeded
+        self.assertFalse(mgr.authenticate_user("quotauser", "SecretPass123"))
 
         reset_success = reset_user_quota("quotauser", self.db_path)
         self.assertTrue(reset_success)
@@ -178,6 +181,59 @@ class TestRFC6455AndQuota(unittest.TestCase):
         qu = next(u for u in users if u["username"] == "quotauser")
         self.assertEqual(qu["used_bytes"], 0)
         self.assertEqual(qu["status"], "active")
+        self.assertEqual(qu["quota_status"], "active")
+
+        # Auth succeeds after reset
+        self.assertTrue(mgr.authenticate_user("quotauser", "SecretPass123"))
+
+    def test_migration_fails_hard_on_unhashable_legacy_row(self):
+        """Test that unhashable legacy rows trigger strict transaction rollback without silent fallback."""
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("""
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT,
+                protocol TEXT DEFAULT 'ssh-ws',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                max_logins INTEGER DEFAULT 1,
+                status TEXT DEFAULT 'active'
+            )
+        """)
+        # Insert corrupted row without password
+        conn.execute("""
+            INSERT INTO users (username, password, expires_at)
+            VALUES ('brokenuser', NULL, '2030-01-01 00:00:00')
+        """)
+        conn.commit()
+        conn.close()
+
+        # Migration must fail hard and raise RuntimeError
+        with self.assertRaises(RuntimeError) as ctx:
+            UserManager(self.db_path)
+
+        self.assertIn("Database migration aborted", str(ctx.exception))
+        self.assertIn("brokenuser", str(ctx.exception))
+
+        # Verify rollback: original table exists with original data intact
+        conn = sqlite3.connect(self.db_path)
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
+        self.assertIn("password", cols, "Table must roll back to legacy schema on abort")
+        conn.close()
+
+    def test_rfc6455_version_validation(self):
+        """Test that proxy header parser accurately detects Sec-WebSocket-Version."""
+        raw_req = (
+            b"GET / HTTP/1.1\r\n"
+            b"Host: example.com\r\n"
+            b"Upgrade: websocket\r\n"
+            b"Connection: Upgrade\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            b"Sec-WebSocket-Version: 8\r\n\r\n"
+        )
+        headers = parse_http_headers(raw_req)
+        self.assertEqual(headers.get("sec-websocket-version"), "8")
 
 if __name__ == "__main__":
     unittest.main()

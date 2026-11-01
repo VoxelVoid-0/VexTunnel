@@ -44,10 +44,13 @@ class TestUserManager(unittest.TestCase):
         self.assertEqual(len(users), 0)
 
     def test_add_user_valid(self):
-        """Verify normal alphanumeric username creation succeeds."""
+        """Verify normal alphanumeric username creation succeeds and returns zero plaintext credentials."""
         user = self.mgr.add_user("testuser1", "SecretPass123", days=30)
         self.assertEqual(user["username"], "testuser1")
         self.assertEqual(user["days"], 30)
+        self.assertNotIn("password", user, "Raw plaintext password must never be returned by add_user")
+        self.assertIn("password_hash", user)
+        self.assertTrue(user["password_hash"].startswith("pbkdf2_sha256$"))
 
         users = self.mgr.list_users()
         self.assertEqual(len(users), 1)

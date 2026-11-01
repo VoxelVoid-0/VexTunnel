@@ -172,7 +172,21 @@ class SSHWebSocketProxy:
                 is_http = any(stripped.startswith(prefix) for prefix in HTTP_PREFIXES)
                 logger.info(f"Handshake from {client_addr} ({len(initial_data)} bytes, is_http={is_http}): {repr(initial_data[:80])}")
 
-                # 3. Connect to backend SSH daemon (e.g. Dropbear 127.0.0.1:109)
+                client_key = None
+                if is_http:
+                    headers = parse_http_headers(initial_data)
+                    ws_version = headers.get("sec-websocket-version")
+
+                    # RFC 6455 Check: If Sec-WebSocket-Version is present, ensure it is 13
+                    if ws_version and ws_version.strip() != "13":
+                        logger.warning(f"Unsupported Sec-WebSocket-Version '{ws_version}' from {client_addr}. Responding 426.")
+                        client_writer.write(b"HTTP/1.1 426 Upgrade Required\r\nSec-WebSocket-Version: 13\r\nContent-Type: text/plain\r\n\r\nUpgrade Required: WebSocket Version 13\r\n")
+                        await client_writer.drain()
+                        return
+
+                    client_key = headers.get("sec-websocket-key")
+
+                # 3. Connect to backend SSH daemon (e.g. Dropbear 127.0.0.1:109) only after validation
                 target_reader, target_writer = await asyncio.open_connection(
                     self.target_host, self.target_port
                 )
@@ -181,9 +195,6 @@ class SSHWebSocketProxy:
                     configure_socket(target_sock)
 
                 if is_http:
-                    headers = parse_http_headers(initial_data)
-                    client_key = headers.get("sec-websocket-key")
-
                     # Send HTTP 101/200 Handshake response to mobile client (RFC 6455 dynamic token)
                     response = self.build_handshake_response(client_key=client_key)
                     client_writer.write(response)

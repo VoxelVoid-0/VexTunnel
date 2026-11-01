@@ -176,7 +176,8 @@ class VexTunnelMenu:
             self.print_banner()
             print(f"\n{BOLD}{GREEN}✅ ACCOUNT CREATED SUCCESSFULLY!{RESET}")
             print(f"{YELLOW}⚠️ Save the password now! In the database, it is stored as a secure PBKDF2 hash.{RESET}")
-            self.print_client_card(res["username"], res["password"], res["expires_at"], days)
+            self.print_client_card(res["username"], password, res["expires_at"], days)
+            del password  # Discard plaintext credential from memory immediately after display
         except Exception as e:
             print(f"\n{RED}Error creating user:{RESET} {e}")
 

@@ -90,6 +90,8 @@ class UserManager:
                     max_logins INTEGER DEFAULT 2,
                     quota_bytes INTEGER DEFAULT 0,
                     used_bytes INTEGER DEFAULT 0,
+                    quota_status TEXT DEFAULT 'active',
+                    last_quota_sync TIMESTAMP,
                     status TEXT DEFAULT 'active'
                 )
             """)
@@ -107,10 +109,9 @@ class UserManager:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_active_sessions_user ON active_sessions(username, status);")
             conn.commit()
 
-            # 3. Hard Migration: Drop legacy 'password' plaintext column if present
+            # 3. Hard Migration: Drop legacy 'password' plaintext column if present (Fail-Hard, No Silent Fallback)
             cols = [col[1] for col in conn.execute("PRAGMA table_info(users)").fetchall()]
             if "password" in cols:
-                # Migrate any unhashed rows safely
                 has_hash_col = "password_hash" in cols
                 sel_query = "SELECT id, password" + (", password_hash" if has_hash_col else "") + " FROM users"
                 rows = conn.execute(sel_query).fetchall()
@@ -118,10 +119,10 @@ class UserManager:
                 for r in rows:
                     p_plain = r["password"]
                     p_hash = r["password_hash"] if has_hash_col else ""
-                    if (not p_hash or not p_hash.startswith("pbkdf2_sha256$")) and p_plain and p_plain != "[PROTECTED]":
-                        migrated_hashes[r["id"]] = hash_password(p_plain)
-                    elif p_hash:
+                    if p_hash and p_hash.startswith("pbkdf2_sha256$"):
                         migrated_hashes[r["id"]] = p_hash
+                    elif p_plain and p_plain != "[PROTECTED]":
+                        migrated_hashes[r["id"]] = hash_password(p_plain)
 
                 conn.execute("ALTER TABLE users RENAME TO users_legacy;")
                 conn.execute("""
@@ -135,18 +136,27 @@ class UserManager:
                         max_logins INTEGER DEFAULT 2,
                         quota_bytes INTEGER DEFAULT 0,
                         used_bytes INTEGER DEFAULT 0,
+                        quota_status TEXT DEFAULT 'active',
+                        last_quota_sync TIMESTAMP,
                         status TEXT DEFAULT 'active'
                     )
                 """)
                 legacy_rows = conn.execute("SELECT * FROM users_legacy").fetchall()
                 for lr in legacy_rows:
                     row_id = lr["id"]
-                    final_hash = migrated_hashes.get(row_id, lr["password_hash"] if "password_hash" in lr.keys() else "")
+                    final_hash = migrated_hashes.get(row_id)
                     if not final_hash:
-                        final_hash = hash_password("SecretPass123")
+                        # Transaction rollback: Restore original state and abort without silent fallbacks
+                        conn.execute("DROP TABLE users;")
+                        conn.execute("ALTER TABLE users_legacy RENAME TO users;")
+                        conn.commit()
+                        raise RuntimeError(
+                            f"Database migration aborted: Cannot derive password hash for legacy user '{lr['username']}' (ID: {row_id}). "
+                            f"Transaction rolled back safely. Manual administrative reset required."
+                        )
                     conn.execute("""
-                        INSERT INTO users (id, username, password_hash, protocol, created_at, expires_at, max_logins, quota_bytes, used_bytes, status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO users (id, username, password_hash, protocol, created_at, expires_at, max_logins, quota_bytes, used_bytes, quota_status, last_quota_sync, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         row_id,
                         lr["username"],
@@ -157,6 +167,8 @@ class UserManager:
                         lr["max_logins"] if "max_logins" in lr.keys() else 2,
                         lr["quota_bytes"] if "quota_bytes" in lr.keys() else 0,
                         lr["used_bytes"] if "used_bytes" in lr.keys() else 0,
+                        lr["quota_status"] if "quota_status" in lr.keys() else "active",
+                        lr["last_quota_sync"] if "last_quota_sync" in lr.keys() else None,
                         lr["status"] if "status" in lr.keys() else "active"
                     ))
                 conn.execute("DROP TABLE users_legacy;")
@@ -168,6 +180,10 @@ class UserManager:
                 conn.execute("ALTER TABLE users ADD COLUMN quota_bytes INTEGER DEFAULT 0")
             if "used_bytes" not in cols_after:
                 conn.execute("ALTER TABLE users ADD COLUMN used_bytes INTEGER DEFAULT 0")
+            if "quota_status" not in cols_after:
+                conn.execute("ALTER TABLE users ADD COLUMN quota_status TEXT DEFAULT 'active'")
+            if "last_quota_sync" not in cols_after:
+                conn.execute("ALTER TABLE users ADD COLUMN last_quota_sync TIMESTAMP")
             conn.commit()
 
         if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
@@ -213,19 +229,19 @@ class UserManager:
         # Record in SQLite with hashed password (no plaintext column)
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO users (username, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, status)
-                VALUES (?, ?, ?, ?, ?, ?, 0, 'active')
+                INSERT INTO users (username, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, quota_status, status)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 'active', 'active')
             """, (username, pwd_hash, protocol, exp_str, max_logins, quota_bytes))
             conn.commit()
 
         return {
             "username": username,
-            "password": password,  # Returned once upon creation for initial client configuration
             "password_hash": pwd_hash,
             "expires_at": exp_str,
             "days": days,
             "max_logins": max_logins,
             "quota_bytes": quota_bytes,
+            "quota_status": "active",
             "status": "active"
         }
 
@@ -233,10 +249,12 @@ class UserManager:
         """Authoritatively authenticate user against PBKDF2-SHA256 hash and verify active account status."""
         username = username.strip().lower()
         with self._get_connection() as conn:
-            row = conn.execute("SELECT password_hash, status FROM users WHERE username = ?", (username,)).fetchone()
+            row = conn.execute("SELECT password_hash, status, quota_status FROM users WHERE username = ?", (username,)).fetchone()
             if not row:
                 return False
             if row["status"] != "active":
+                return False
+            if "quota_status" in row.keys() and row["quota_status"] == "quota_exceeded":
                 return False
             return verify_password(password, row["password_hash"])
 
@@ -343,6 +361,8 @@ class UserManager:
                     "max_logins": r["max_logins"],
                     "quota_bytes": r["quota_bytes"],
                     "used_bytes": r["used_bytes"],
+                    "quota_status": r["quota_status"] if "quota_status" in cols else "active",
+                    "last_quota_sync": r["last_quota_sync"] if "last_quota_sync" in cols else None,
                     "status": status
                 })
         return users

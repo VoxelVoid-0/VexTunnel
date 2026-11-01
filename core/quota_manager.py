@@ -14,6 +14,7 @@ Features:
 import os
 import sys
 import re
+import datetime
 import subprocess
 import signal
 import sqlite3
@@ -74,33 +75,55 @@ def get_user_uid(username: str) -> Optional[int]:
         pass
     return None
 
-def setup_accounting_rule(uid: int) -> bool:
-    """Ensure iptables OUTPUT rule exists for this UID to count outgoing traffic."""
+def init_firewall_chains() -> bool:
+    """Initialize dedicated VEXTUNNEL_BLOCK and VEXTUNNEL_QUOTA chains in iptables."""
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
+        # 1. Dedicated Block Chain (Evaluated at the very top of OUTPUT)
+        subprocess.run(["iptables", "-N", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        check_block = subprocess.run(["iptables", "-C", "OUTPUT", "-j", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check_block.returncode != 0:
+            subprocess.run(["iptables", "-I", "OUTPUT", "1", "-j", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 2. Dedicated Quota Accounting Chain
+        subprocess.run(["iptables", "-N", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        check_quota = subprocess.run(["iptables", "-C", "OUTPUT", "-j", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check_quota.returncode != 0:
+            subprocess.run(["iptables", "-A", "OUTPUT", "-j", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        logger.debug(f"Failed to initialize dedicated firewall chains: {e}")
+        return False
+
+def setup_accounting_rule(uid: int) -> bool:
+    """Ensure iptables VEXTUNNEL_QUOTA rule exists for this UID to count outgoing traffic."""
+    if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
+        return False
+    try:
+        init_firewall_chains()
         check = subprocess.run(
-            ["iptables", "-C", "OUTPUT", "-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"],
+            ["iptables", "-C", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         if check.returncode != 0:
             subprocess.run(
-                ["iptables", "-A", "OUTPUT", "-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"],
+                ["iptables", "-A", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
-            logger.info(f"Initialized iptables accounting rule for UID {uid}")
+            logger.info(f"Initialized iptables accounting rule for UID {uid} in VEXTUNNEL_QUOTA")
         return True
     except Exception as e:
         logger.debug(f"Failed to setup accounting rule for UID {uid}: {e}")
         return False
 
 def read_uid_bytes(uid: int) -> int:
-    """Parse exact byte count for UID from iptables OUTPUT table."""
+    """Parse exact byte count for UID from isolated VEXTUNNEL_QUOTA chain."""
     if os.name == 'nt':
         return 0
     try:
         res = subprocess.run(
-            ["iptables", "-L", "OUTPUT", "-v", "-n", "-x"],
+            ["iptables", "-L", "VEXTUNNEL_QUOTA", "-v", "-n", "-x"],
             capture_output=True, text=True, timeout=5
         )
         total_bytes = 0
@@ -122,39 +145,39 @@ def read_uid_bytes(uid: int) -> int:
         return 0
 
 def block_user_network(uid: int) -> bool:
-    """Insert iptables DROP rule for UID to cleanly block network egress."""
+    """Insert iptables DROP rule in VEXTUNNEL_BLOCK to cleanly block network egress."""
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
+        init_firewall_chains()
         check = subprocess.run(
-            ["iptables", "-C", "OUTPUT", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
+            ["iptables", "-C", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         if check.returncode != 0:
             subprocess.run(
-                ["iptables", "-I", "OUTPUT", "1", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
+                ["iptables", "-A", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
-            logger.warning(f"Firewall: Inserted network DROP rule for UID {uid}")
+            logger.warning(f"Firewall: Inserted network DROP rule for UID {uid} in VEXTUNNEL_BLOCK")
         return True
     except Exception as e:
         logger.error(f"Error blocking network for UID {uid}: {e}")
         return False
 
 def unblock_user_network(uid: int) -> bool:
-    """Remove all iptables DROP rules for UID to unblock network."""
+    """Remove all iptables DROP rules for UID from VEXTUNNEL_BLOCK."""
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
-        # Loop to remove duplicate DROP rules if any exist
         while True:
             res = subprocess.run(
-                ["iptables", "-D", "OUTPUT", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
+                ["iptables", "-D", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             if res.returncode != 0:
                 break
-        logger.info(f"Firewall: Cleared network DROP rules for UID {uid}")
+        logger.info(f"Firewall: Cleared network DROP rules for UID {uid} from VEXTUNNEL_BLOCK")
         return True
     except Exception as e:
         logger.error(f"Error unblocking network for UID {uid}: {e}")
@@ -183,16 +206,23 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
     Returns status map per user.
     """
     summary = {}
+    init_firewall_chains()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     try:
         conn = sqlite3.connect(db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
-        users = conn.execute("SELECT id, username, quota_bytes, used_bytes, status FROM users").fetchall()
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
+        has_quota_status = "quota_status" in cols
+
+        users = conn.execute("SELECT * FROM users").fetchall()
 
         for u in users:
             uname = u["username"]
-            quota = u["quota_bytes"]
-            current_used = u["used_bytes"]
+            quota = u["quota_bytes"] if "quota_bytes" in cols else 0
+            current_used = u["used_bytes"] if "used_bytes" in cols else 0
             status = u["status"]
+            quota_status = u["quota_status"] if has_quota_status else "active"
 
             uid = get_user_uid(uname)
             if uid is not None and uid > 0:
@@ -200,24 +230,34 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
                 iptables_bytes = read_uid_bytes(uid)
                 new_used = max(current_used, iptables_bytes)
 
-                if new_used != current_used:
-                    conn.execute("UPDATE users SET used_bytes = ? WHERE username = ?", (new_used, uname))
-                    current_used = new_used
-
                 # Quota Exceeded Enforcement
-                if quota > 0 and current_used >= quota:
-                    if status != "quota_exceeded":
-                        logger.warning(f"User '{uname}' exceeded quota ({format_bytes(current_used)} / {format_bytes(quota)}). Locking access.")
-                        conn.execute("UPDATE users SET status = 'quota_exceeded' WHERE username = ?", (uname,))
-                        status = "quota_exceeded"
-
-                    # Ensure network is blocked and lingering sessions terminated
+                if quota > 0 and new_used >= quota:
+                    quota_status = "quota_exceeded"
+                    status = "quota_exceeded"
+                    if has_quota_status:
+                        conn.execute("""
+                            UPDATE users SET used_bytes = ?, quota_status = 'quota_exceeded', status = 'quota_exceeded', last_quota_sync = ?
+                            WHERE username = ?
+                        """, (new_used, now_str, uname))
+                    else:
+                        conn.execute("UPDATE users SET used_bytes = ?, status = 'quota_exceeded' WHERE username = ?", (new_used, uname))
                     block_user_network(uid)
                     kill_user_sessions(uname)
+                else:
+                    if new_used != current_used:
+                        if has_quota_status:
+                            conn.execute("""
+                                UPDATE users SET used_bytes = ?, last_quota_sync = ?
+                                WHERE username = ?
+                            """, (new_used, now_str, uname))
+                        else:
+                            conn.execute("UPDATE users SET used_bytes = ? WHERE username = ?", (new_used, uname))
+                    current_used = new_used
 
             summary[uname] = {
                 "quota_bytes": quota,
                 "used_bytes": current_used,
+                "quota_status": quota_status,
                 "status": status
             }
 
@@ -231,19 +271,27 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
 def reset_user_quota(username: str, db_path: str = DEFAULT_DB_PATH) -> bool:
     """Reset bandwidth counters and re-enable active network access for user."""
     username = username.strip().lower()
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         conn = sqlite3.connect(db_path, timeout=10.0)
-        cur = conn.execute("UPDATE users SET used_bytes = 0, status = 'active' WHERE username = ?", (username,))
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
+        if "quota_status" in cols:
+            cur = conn.execute("""
+                UPDATE users SET used_bytes = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
+                WHERE username = ?
+            """, (now_str, username))
+        else:
+            cur = conn.execute("UPDATE users SET used_bytes = 0, status = 'active' WHERE username = ?", (username,))
         conn.commit()
         conn.close()
 
         uid = get_user_uid(username)
         if uid is not None and uid > 0:
             unblock_user_network(uid)
-            # Reset iptables counter for this rule if possible
+            # Reset iptables counter for VEXTUNNEL_QUOTA chain
             if hasattr(os, 'geteuid') and os.geteuid() == 0:
                 subprocess.run(
-                    ["iptables", "-Z", "OUTPUT"],
+                    ["iptables", "-Z", "VEXTUNNEL_QUOTA"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
 
@@ -252,3 +300,4 @@ def reset_user_quota(username: str, db_path: str = DEFAULT_DB_PATH) -> bool:
     except Exception as e:
         logger.error(f"Failed to reset quota for {username}: {e}")
         return False
+
