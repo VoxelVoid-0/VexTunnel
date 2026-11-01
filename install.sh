@@ -17,7 +17,7 @@ BOLD='\033[1m'
 clear 2>/dev/null || true
 echo -e "${CYAN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║                   ⚡ VEXTUNNEL SUITE v1.0 ⚡                 ║"
+echo "║                  ⚡ VEXTUNNEL SUITE v1.2.0 ⚡                ║"
 echo "║          Clean • Modern • Zero-Backdoor VPS Tunnel           ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"

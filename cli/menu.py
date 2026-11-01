@@ -88,7 +88,7 @@ class VexTunnelMenu:
         online_count = stats.get("online_users_count", 0)
 
         print(f"{CYAN}{BOLD}╔══════════════════════════════════════════════════════════════╗{RESET}")
-        print(f"{CYAN}{BOLD}║                   ⚡ VEXTUNNEL SUITE v1.2 ⚡                 ║{RESET}")
+        print(f"{CYAN}{BOLD}║                  ⚡ VEXTUNNEL SUITE v1.2.0 ⚡                ║{RESET}")
         print(f"{CYAN}{BOLD}║         Clean • High-Speed • Zero-Backdoor VPS Suite         ║{RESET}")
         print(f"{CYAN}{BOLD}╚══════════════════════════════════════════════════════════════╝{RESET}")
         print(f" {WHITE}Host / IP :{RESET} {YELLOW}{self.host}{RESET} | {WHITE}OS:{RESET} {stats['os']} | {WHITE}Uptime:{RESET} {GREEN}{stats.get('uptime', 'N/A')}{RESET}")
@@ -99,7 +99,7 @@ class VexTunnelMenu:
     def generate_vextunnel_uri(self, username: str) -> str:
         """Generate structured machine-readable connection URI."""
         config = {
-            "v": "1.2",
+            "v": "1.2.0",
             "host": self.host,
             "user": username,
             "ws_http": 80,
