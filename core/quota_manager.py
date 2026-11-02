@@ -270,10 +270,14 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
             quota_status = u["quota_status"] if has_quota_status else "active"
 
             uid = get_user_uid(uname)
+            new_used = current_used
+            new_last_counter = u["last_counter_bytes"] if "last_counter_bytes" in cols and u["last_counter_bytes"] is not None else 0
+            last_counter = new_last_counter
+            delta = 0
+
             if uid is not None and uid > 0:
                 setup_accounting_rule(uid)
                 iptables_bytes = read_uid_bytes(uid)
-                last_counter = u["last_counter_bytes"] if "last_counter_bytes" in cols and u["last_counter_bytes"] is not None else 0
 
                 # Delta computation with reboot / reset watermark tolerance
                 if iptables_bytes >= last_counter:
@@ -311,7 +315,8 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
                     """, (new_used, now_str, uname))
                 else:
                     conn.execute("UPDATE users SET used_bytes = ?, status = 'quota_exceeded' WHERE username = ?", (new_used, uname))
-                block_user_network(uid)
+                if uid is not None and uid > 0:
+                    block_user_network(uid)
                 kill_user_sessions(uname)
 
                 if last_alert < 100:
