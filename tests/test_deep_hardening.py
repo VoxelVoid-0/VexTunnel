@@ -14,6 +14,7 @@ import sys
 import tempfile
 import sqlite3
 import datetime
+import signal
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -209,6 +210,46 @@ class TestDeepHardening(unittest.TestCase):
         with patch("builtins.input", side_effect=KeyboardInterrupt):
             res = safe_input("Test Prompt: ")
             self.assertEqual(res, "0", "KeyboardInterrupt must be safely trapped and return '0'")
+
+    def test_07_enforce_concurrency_terminates_unregistered_rogue_accounts(self):
+        """Verify enforce_concurrency_limits terminates unauthorized/orphaned accounts not in database."""
+        # Database only has user 'activeuser'
+        self.user_mgr.add_user("activeuser", "ValidPass123", days=30, max_logins=2)
+
+        # Process table contains 'activeuser' (1 session) and 'rogueuser' (2 sessions)
+        mock_active = {
+            "activeuser": [10001],
+            "rogueuser": [20001, 20002]
+        }
+
+        with patch("core.session_enforcer.get_active_user_sessions", return_value=mock_active), \
+             patch("core.session_enforcer.sync_all_quotas"), \
+             patch("os.kill") as mock_kill:
+            killed = enforce_concurrency_limits(self.db_path)
+
+            # rogueuser sessions must be terminated
+            self.assertEqual(killed, 2, "Both sessions of unregistered rogueuser must be killed")
+            mock_kill.assert_any_call(20001, signal.SIGTERM)
+            mock_kill.assert_any_call(20002, signal.SIGTERM)
+
+    def test_08_sync_orphaned_system_users(self):
+        """Verify sync_orphaned_system_users purges Linux accounts with restricted shells not present in DB."""
+        # DB has 'minsara'
+        self.user_mgr.add_user("minsara", "ValidPass123", days=30)
+
+        # Mock pwd entries: minsara (registered), leonvpn (orphaned), ubuntu (admin), root (system)
+        mock_entry_minsara = MagicMock(pw_name="minsara", pw_uid=1001, pw_shell="/bin/false")
+        mock_entry_leonvpn = MagicMock(pw_name="leonvpn", pw_uid=1002, pw_shell="/bin/false")
+        mock_entry_ubuntu = MagicMock(pw_name="ubuntu", pw_uid=1000, pw_shell="/bin/bash")
+        mock_entry_root = MagicMock(pw_name="root", pw_uid=0, pw_shell="/bin/bash")
+
+        with patch("os.name", "posix"), \
+             patch("os.geteuid", return_value=0), \
+             patch("pwd.getpwall", return_value=[mock_entry_minsara, mock_entry_leonvpn, mock_entry_ubuntu, mock_entry_root]), \
+             patch("subprocess.run") as mock_subproc:
+            cleaned = self.user_mgr.sync_orphaned_system_users()
+            self.assertEqual(cleaned, 1)
+            mock_subproc.assert_called_with(["userdel", "-f", "leonvpn"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 if __name__ == "__main__":
     unittest.main()

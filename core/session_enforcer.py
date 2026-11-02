@@ -158,8 +158,16 @@ def enforce_concurrency_limits(db_path: str = DEFAULT_DB_PATH) -> int:
 
         for username, pids in active_processes.items():
             user_info = user_limits.get(username)
-            # Never terminate accounts not managed by VexTunnel (e.g. system administrators, cloud users)
+            # If account is not registered in VexTunnel database, terminate rogue/orphaned tunnel sessions immediately
             if not user_info:
+                logger.warning(f"Unregistered tunnel account '{username}' detected. Terminating all {len(pids)} active sessions.")
+                for pid in pids:
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                        killed_count += 1
+                        conn.execute("UPDATE active_sessions SET status = 'closed' WHERE pid = ?", (pid,))
+                    except (ProcessLookupError, OSError):
+                        pass
                 continue
 
             # If registered user is expired, locked, or quota exceeded, terminate all sessions

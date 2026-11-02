@@ -399,8 +399,32 @@ class UserManager:
 
         return users
 
+    def sync_orphaned_system_users(self) -> int:
+        """Lock or remove orphaned Linux accounts with restricted shells that are not registered in VexTunnel."""
+        if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
+            return 0
+
+        cleaned = 0
+        try:
+            import pwd
+            from core.session_enforcer import SYSTEM_USERS, is_system_or_admin_user
+            with self._get_connection() as conn:
+                registered_users = {r[0] for r in conn.execute("SELECT username FROM users").fetchall()}
+
+            restricted_shells = {"/bin/false", "/usr/sbin/nologin", "/bin/nologin"}
+            for entry in pwd.getpwall():
+                if entry.pw_uid >= 1000 and entry.pw_shell in restricted_shells:
+                    uname = entry.pw_name
+                    if uname not in registered_users and uname not in SYSTEM_USERS and not is_system_or_admin_user(uname):
+                        # Orphaned account found! Remove from Linux OS
+                        subprocess.run(["userdel", "-f", uname], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        cleaned += 1
+        except Exception:
+            pass
+        return cleaned
+
     def cleanup_expired(self) -> int:
-        """Lock expired accounts safely and dispatch Telegram alert if configured."""
+        """Lock expired accounts safely, purge orphaned system accounts, and dispatch Telegram alert if configured."""
         count = 0
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._get_connection() as conn:
@@ -418,6 +442,9 @@ class UserManager:
                 except Exception:
                     pass
             conn.commit()
+
+        # Also purge any orphaned Linux accounts not in DB
+        self.sync_orphaned_system_users()
         return count
 
 if __name__ == "__main__":
