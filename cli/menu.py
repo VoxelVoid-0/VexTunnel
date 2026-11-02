@@ -24,6 +24,12 @@ from core.quota_manager import (
 from core.monitor import get_system_stats, get_all_services_status, get_online_users
 from core.watchdog import VexTunnelDoctor, ServiceWatchdog
 from core.telegram_notifier import get_telegram_config, save_telegram_config, send_telegram_message
+from core.updater import (
+    capture_pre_update_state, backup_database, sync_dependencies,
+    apply_migrations, restart_tunnel_services, verify_health,
+    interactive_rollback_countdown, rollback_update, reexec_menu,
+    get_installed_version
+)
 
 # Terminal Color Codes
 CYAN = "\033[96m"
@@ -599,6 +605,139 @@ class VexTunnelMenu:
         """Backwards-compatible alias for telegram_alerts_and_backup_hub."""
         self.telegram_alerts_and_backup_hub()
 
+    def check_and_apply_update(self, non_interactive: bool = False, force: bool = False, dev: bool = False):
+        self.print_banner()
+        print(f"\n{BOLD}{GREEN}=== VEXTUNNEL SAFE UPDATE & MIGRATION HUB ==={RESET}\n")
+
+        install_dir = "/etc/vextunnel" if os.path.exists("/etc/vextunnel") else os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        pre_state = capture_pre_update_state(db_path=self.user_mgr.db_path, repo_dir=install_dir)
+        current_ver = pre_state["version"]
+        commit_hash = pre_state["commit"]
+
+        print(f" {WHITE}Currently Installed :{RESET} {CYAN}{current_ver}{RESET} (Commit: {YELLOW}{commit_hash}{RESET})")
+        print(f" {WHITE}Target Channel      :{RESET} {'Development (main)' if dev else 'Stable Official Release (GitHub)'}")
+        print(f"\nChecking GitHub for latest release...", end=" ", flush=True)
+
+        target_ver = current_ver
+        if not dev:
+            try:
+                # Tier 1: GitHub API
+                url = "https://api.github.com/repos/VoxelVoid-0/VexTunnel/releases/latest"
+                req = urllib.request.Request(url, headers={'User-Agent': 'VexTunnel-Updater'})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+                    target_ver = data.get("tag_name", current_ver)
+            except Exception:
+                try:
+                    # Tier 2: Redirect location header
+                    req = urllib.request.Request("https://github.com/VoxelVoid-0/VexTunnel/releases/latest", method='HEAD', headers={'User-Agent': 'VexTunnel-Updater'})
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        loc = resp.geturl()
+                        target_ver = loc.split('/')[-1] if '/' in loc else current_ver
+                except Exception:
+                    target_ver = current_ver
+
+        print(f"{GREEN}DONE{RESET}")
+        print(f" {WHITE}Latest Available    :{RESET} {GREEN}{target_ver if not dev else 'latest-main'}{RESET}")
+
+        if not dev and target_ver == current_ver and not force:
+            print(f"\n{GREEN}✅ You are already on the latest official version ({current_ver})!{RESET}")
+            if not non_interactive:
+                reinstall = safe_input(f"\n{YELLOW}Force re-install / refresh core files? (y/n) [n]: {RESET}").lower()
+                if reinstall != 'y':
+                    wait_enter()
+                    return
+            else:
+                return
+
+        if not non_interactive:
+            confirm = safe_input(f"\n{CYAN}Proceed with automated update to {target_ver if not dev else 'latest-main'}? (y/n) [y]: {RESET}").lower()
+            if confirm in ('n', 'no'):
+                return
+
+        print(f"\n{BOLD}Starting automated 5-phase update pipeline...{RESET}")
+
+        # Phase 1: Database Safety Gate
+        print(f" • [1/5] Creating SQLite Native Online Backup...", end=" ", flush=True)
+        backup_dir = os.path.join(install_dir, "backups")
+        bkp_ok, bkp_path = backup_database(self.user_mgr.db_path, backup_dir=backup_dir)
+        if not bkp_ok:
+            print(f"{RED}FAILED: {bkp_path}{RESET}")
+            print(f"{RED}[ABORT] Update stopped to protect database.{RESET}")
+            wait_enter()
+            return
+        print(f"{GREEN}OK ({os.path.basename(bkp_path)}){RESET}")
+
+        # Phase 2: Pull / Unpack Code
+        print(f" • [2/5] Deploying updated codebase...", end=" ", flush=True)
+        if dev or os.path.isdir(os.path.join(install_dir, ".git")):
+            try:
+                subprocess.run(["git", "fetch", "origin", "main"], cwd=install_dir, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["git", "reset", "--hard", "origin/main"], cwd=install_dir, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                print(f"{YELLOW}Git pull notice: {e}{RESET}")
+        else:
+            tar_url = f"https://github.com/VoxelVoid-0/VexTunnel/releases/download/{target_ver}/vextunnel.tar.gz"
+            tar_tmp = f"/tmp/vextunnel-{target_ver}.tar.gz"
+            downloaded = False
+            try:
+                urllib.request.urlretrieve(tar_url, tar_tmp)
+                downloaded = True
+            except Exception:
+                try:
+                    alt_url = f"https://github.com/VoxelVoid-0/VexTunnel/archive/refs/tags/{target_ver}.tar.gz"
+                    urllib.request.urlretrieve(alt_url, tar_tmp)
+                    downloaded = True
+                except Exception:
+                    pass
+            if downloaded and os.path.exists(tar_tmp):
+                subprocess.run(["tar", "-xzf", tar_tmp, "--strip-components=1", "-C", install_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    os.remove(tar_tmp)
+                except Exception:
+                    pass
+        print(f"{GREEN}OK{RESET}")
+
+        # Phase 3: Dependencies
+        print(f" • [3/5] Synchronizing dependencies (PEP 668)...", end=" ", flush=True)
+        sync_dependencies(install_dir)
+        print(f"{GREEN}OK{RESET}")
+
+        # Phase 4: Database Migrations
+        print(f" • [4/5] Executing database schema migrations...", end=" ", flush=True)
+        mig_ok = apply_migrations(self.user_mgr.db_path)
+        print(f"{GREEN}OK{RESET}" if mig_ok else f"{YELLOW}WARN{RESET}")
+
+        # Phase 5: Service Restart & Health Check
+        print(f" • [5/5] Reloading systemd & verifying services...", end=" ", flush=True)
+        restart_tunnel_services(pre_state["active_services"])
+        time.sleep(2)
+        healthy, failed = verify_health(pre_state["active_services"])
+        print(f"{GREEN}HEALTHY ✅{RESET}" if healthy else f"{RED}FAILED ❌{RESET}")
+
+        if not healthy:
+            action = interactive_rollback_countdown(failed, timeout_sec=15)
+            if action in ('r', 'timeout'):
+                print(f"\n{YELLOW}Executing atomic safe rollback...{RESET}")
+                rollback_update(install_dir, pre_state["commit"], bkp_path, self.user_mgr.db_path, pre_state["active_services"])
+                print(f"{GREEN}✅ Server successfully restored to previous stable version ({pre_state['version']})!{RESET}")
+                wait_enter()
+                return
+            else:
+                print(f"\n{YELLOW}Rollback cancelled by administrator. Dropping to manual inspection.{RESET}")
+                wait_enter()
+                return
+
+        print(f"\n{BOLD}{GREEN}══════════════════════════════════════════════════════════════{RESET}")
+        print(f"{BOLD}{GREEN}      ✅ VEXTUNNEL SUCCESSFULLY UPDATED & RUNNING!      {RESET}")
+        print(f"{BOLD}{GREEN}══════════════════════════════════════════════════════════════{RESET}")
+
+        if not non_interactive:
+            time.sleep(1)
+            print(f"\n{CYAN}Reloading management panel with new version...{RESET}")
+            time.sleep(1)
+            reexec_menu()
+
     def run(self):
         while True:
             try:
@@ -620,11 +759,12 @@ class VexTunnelMenu:
                 print(f"  {CYAN}12){RESET} Domain & SSL Certificate Settings")
                 print(f"  {CYAN}13){RESET} VPS Bandwidth Speedtest")
                 print(f"  {CYAN}14){RESET} Telegram Bot Alerts & Backup Hub")
+                print(f"  {CYAN}15){RESET} Check for Updates & Self-Upgrade")
                 print(f"")
                 print(f"  {RED}0){RESET} Exit")
                 print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
 
-                choice = safe_input(f"{WHITE}Select an option [0-14]: {RESET}")
+                choice = safe_input(f"{WHITE}Select an option [0-15]: {RESET}")
                 if choice == "1":
                     self.create_ssh_user()
                 elif choice == "2":
@@ -653,6 +793,8 @@ class VexTunnelMenu:
                     self.speedtest()
                 elif choice == "14":
                     self.telegram_alerts_and_backup_hub()
+                elif choice == "15":
+                    self.check_and_apply_update()
                 elif choice in ("0", "q", "exit"):
                     clear_screen()
                     print(f"\n{GREEN}Exiting VexTunnel Menu. Goodbye!{RESET}\n")
@@ -666,5 +808,10 @@ class VexTunnelMenu:
                 break
 
 if __name__ == "__main__":
-    menu = VexTunnelMenu()
-    menu.run()
+    if len(sys.argv) > 1 and sys.argv[1] in ("--update", "update"):
+        is_dev = "--dev" in sys.argv
+        menu = VexTunnelMenu()
+        menu.check_and_apply_update(non_interactive=True, dev=is_dev)
+    else:
+        menu = VexTunnelMenu()
+        menu.run()

@@ -1,0 +1,53 @@
+name: VexTunnel Release Automation
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Package & Publish Release Assets
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Package Clean Distribution Archive
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          echo "Packaging VexTunnel release ${TAG_NAME}..."
+          mkdir -p dist
+          # Create clean production tarball excluding git metadata, tests, and temporary local files
+          tar --exclude='./.git' \
+              --exclude='./.github' \
+              --exclude='./tests' \
+              --exclude='./*.db' \
+              --exclude='./*.db-*' \
+              --exclude='./certs' \
+              --exclude='./backups' \
+              --exclude='./__pycache__' \
+              --exclude='*/*.pyc' \
+              -czf "dist/vextunnel-${TAG_NAME}.tar.gz" .
+          
+          # Provide generic vextunnel.tar.gz alias pointing to the exact same bytes
+          cp "dist/vextunnel-${TAG_NAME}.tar.gz" "dist/vextunnel.tar.gz"
+          
+          # Generate cryptographic SHA256 checksums
+          cd dist
+          sha256sum "vextunnel-${TAG_NAME}.tar.gz" > "vextunnel-${TAG_NAME}.tar.gz.sha256"
+          sha256sum "vextunnel.tar.gz" > "vextunnel.tar.gz.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/vextunnel-*.tar.gz
+            dist/vextunnel-*.sha256
+            dist/vextunnel.tar.gz
+          generate_release_notes: true
+          draft: false
+          prerelease: false
