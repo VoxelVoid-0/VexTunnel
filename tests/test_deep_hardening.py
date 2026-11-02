@@ -11,6 +11,7 @@ Covers:
 import unittest
 import os
 import sys
+import subprocess
 import tempfile
 import sqlite3
 import datetime
