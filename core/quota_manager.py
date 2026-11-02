@@ -2,7 +2,7 @@
 """
 VexTunnel - Hardware & Kernel-Level UID Byte Quota Manager
 Author: VoxelVoid-0
-License: MIT
+License: GPL-3.0
 
 Features:
 - Linux kernel UID-based packet and byte accounting via iptables

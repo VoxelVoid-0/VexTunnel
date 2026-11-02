@@ -2,7 +2,7 @@
 """
 VexTunnel - Session Concurrency & Login Limit Enforcer
 Author: VoxelVoid-0
-License: MIT
+License: GPL-3.0
 
 Enforces max_logins per user account in real-time by inspecting
 active Dropbear/SSH user sessions and terminating unauthorized concurrent logins.

@@ -2,7 +2,7 @@
 """
 VexTunnel - High-Performance Async SSH WebSocket Proxy (Hardened v1.3)
 Author: VoxelVoid-0
-License: MIT
+License: GPL-3.0
 
 Features:
 - Kernel socket tuning (TCP_NODELAY, SO_KEEPALIVE, 1MB socket buffers)

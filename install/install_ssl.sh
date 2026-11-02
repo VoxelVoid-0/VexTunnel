@@ -2,7 +2,7 @@
 # ==========================================================
 # ⚡ VexTunnel - SSL / TLS Certificate Automation (Hardened) ⚡
 # Author : VoxelVoid-0 (https://github.com/VoxelVoid-0/VexTunnel)
-# License: MIT
+# License: GPL-3.0
 # ==========================================================
 set -euo pipefail
 

@@ -2,7 +2,7 @@
 """
 VexTunnel - Telegram Notification & Quota Alert Engine (Phase 3)
 Author: VoxelVoid-0
-License: MIT
+License: GPL-3.0
 
 Features:
 - Zero external dependency Telegram Bot API client (built using Python urllib standard library)

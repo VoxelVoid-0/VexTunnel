@@ -2,7 +2,7 @@
 """
 VexTunnel - Interactive Terminal Management Menu (TUI Hardened v1.3)
 Author: VoxelVoid-0
-License: MIT
+License: GPL-3.0
 """
 
 import os

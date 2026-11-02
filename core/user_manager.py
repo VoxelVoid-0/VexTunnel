@@ -2,7 +2,7 @@
 """
 VexTunnel - User & Account Management Engine (Hardened v1.3)
 Author: VoxelVoid-0
-License: MIT
+License: GPL-3.0
 
 Features:
 - Salted PBKDF2-SHA256 cryptographic credential hashing

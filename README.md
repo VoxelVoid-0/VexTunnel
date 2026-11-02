@@ -3,7 +3,7 @@
 [![VexTunnel CI](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/ci.yml)
 [![Security Analysis](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/security.yml/badge.svg)](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/security.yml)
 [![Release](https://img.shields.io/github/v/release/VoxelVoid-0/VexTunnel?color=blue&logo=github)](https://github.com/VoxelVoid-0/VexTunnel/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20%7C%20ARM64-orange.svg)](#)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](#)
 
@@ -146,4 +146,4 @@ bash <(curl -fsSL https://raw.githubusercontent.com/VoxelVoid-0/VexTunnel/main/i
 
 ## License
 
-Released under the [MIT License](LICENSE) © 2026 VoxelVoid-0.
+Distributed under the [GNU General Public License v3.0](LICENSE) © 2026 VoxelVoid-0.

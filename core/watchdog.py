@@ -2,7 +2,7 @@
 """
 VexTunnel - Self-Healing Service Watchdog & Startup Health Doctor (Phase 2)
 Author: VoxelVoid-0
-License: MIT
+License: GPL-3.0
 
 Features:
 - Automated self-healing for core tunnel daemons (WS, WSS, Enforcer, Dropbear, UDPGW)
