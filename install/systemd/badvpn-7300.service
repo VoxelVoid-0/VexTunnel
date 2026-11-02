@@ -1,0 +1,14 @@
+[Unit]
+Description=BadVPN UDPGW 7300 Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/vextunnel/ports.env
+ExecStart=/usr/bin/badvpn-udpgw --listen-addr 127.0.0.1:${BADVPN_PORT:-7300} --max-clients 500
+Restart=always
+RestartSec=3s
+
+[Install]
+WantedBy=multi-user.target

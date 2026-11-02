@@ -28,7 +28,9 @@ from core.updater import (
     capture_pre_update_state, backup_database, sync_dependencies,
     apply_migrations, restart_tunnel_services, verify_health,
     interactive_rollback_countdown, rollback_update, reexec_menu,
-    get_installed_version
+    get_installed_version, check_disk_space, pause_enforcer_for_migration,
+    create_code_snapshot, stage_and_verify_release, promote_staging_to_production,
+    sync_systemd_units, deep_socket_health_check, two_tier_rollback
 )
 
 # Terminal Color Codes
@@ -607,7 +609,7 @@ class VexTunnelMenu:
 
     def check_and_apply_update(self, non_interactive: bool = False, force: bool = False, dev: bool = False):
         self.print_banner()
-        print(f"\n{BOLD}{GREEN}=== VEXTUNNEL SAFE UPDATE & MIGRATION HUB ==={RESET}\n")
+        print(f"\n{BOLD}{GREEN}=== VEXTUNNEL SAFE UPDATE & MIGRATION HUB (v6) ==={RESET}\n")
 
         install_dir = "/etc/vextunnel" if os.path.exists("/etc/vextunnel") else os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         pre_state = capture_pre_update_state(db_path=self.user_mgr.db_path, repo_dir=install_dir)
@@ -616,6 +618,16 @@ class VexTunnelMenu:
 
         print(f" {WHITE}Currently Installed :{RESET} {CYAN}{current_ver}{RESET} (Commit: {YELLOW}{commit_hash}{RESET})")
         print(f" {WHITE}Target Channel      :{RESET} {'Development (main)' if dev else 'Stable Official Release (GitHub)'}")
+
+        # Phase 0: Pre-flight Disk Check
+        disk_ok, free_mb = check_disk_space(install_dir, min_free_mb=150)
+        print(f" {WHITE}Disk Space Check    :{RESET} {GREEN}{free_mb} MB Available (>= 150 MB required){RESET}" if disk_ok else f" {WHITE}Disk Space Check    :{RESET} {RED}{free_mb} MB Available (< 150 MB required){RESET}")
+        if not disk_ok:
+            print(f"\n{RED}[ABORT] Insufficient disk space ({free_mb} MB). Update halted to protect database integrity.{RESET}")
+            if not non_interactive:
+                wait_enter()
+            return
+
         print(f"\nChecking GitHub for latest release...", end=" ", flush=True)
 
         target_ver = current_ver
@@ -655,51 +667,61 @@ class VexTunnelMenu:
             if confirm in ('n', 'no'):
                 return
 
-        print(f"\n{BOLD}Starting automated 5-phase update pipeline...{RESET}")
+        print(f"\n{BOLD}Starting automated 5-phase update pipeline (v6)...{RESET}")
 
-        # Phase 1: Database Safety Gate
-        print(f" • [1/5] Creating SQLite Native Online Backup...", end=" ", flush=True)
+        # Phase 1: Database Isolation & Staging Download
+        print(f" • [1/5] Isolating database & verifying staging package...", end=" ", flush=True)
+        # Freeze DB writes early without dropping WS tunnels
+        pause_enforcer_for_migration()
+
+        # Create SQLite native online backup
         backup_dir = os.path.join(install_dir, "backups")
         bkp_ok, bkp_path = backup_database(self.user_mgr.db_path, backup_dir=backup_dir)
         if not bkp_ok:
             print(f"{RED}FAILED: {bkp_path}{RESET}")
             print(f"{RED}[ABORT] Update stopped to protect database.{RESET}")
-            wait_enter()
+            restart_tunnel_services(pre_state["active_services"])
+            if not non_interactive:
+                wait_enter()
             return
-        print(f"{GREEN}OK ({os.path.basename(bkp_path)}){RESET}")
 
-        # Phase 2: Pull / Unpack Code
-        print(f" • [2/5] Deploying updated codebase...", end=" ", flush=True)
-        if dev or os.path.isdir(os.path.join(install_dir, ".git")):
-            try:
-                subprocess.run(["git", "fetch", "origin", "main"], cwd=install_dir, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["git", "reset", "--hard", "origin/main"], cwd=install_dir, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            except Exception as e:
-                print(f"{YELLOW}Git pull notice: {e}{RESET}")
+        # Resolve tarball URL
+        if dev:
+            tar_url = "https://github.com/VoxelVoid-0/VexTunnel/archive/refs/heads/main.tar.gz"
         else:
             tar_url = f"https://github.com/VoxelVoid-0/VexTunnel/releases/download/{target_ver}/vextunnel.tar.gz"
-            tar_tmp = f"/tmp/vextunnel-{target_ver}.tar.gz"
-            downloaded = False
-            try:
-                urllib.request.urlretrieve(tar_url, tar_tmp)
-                downloaded = True
-            except Exception:
-                try:
-                    alt_url = f"https://github.com/VoxelVoid-0/VexTunnel/archive/refs/tags/{target_ver}.tar.gz"
-                    urllib.request.urlretrieve(alt_url, tar_tmp)
-                    downloaded = True
-                except Exception:
-                    pass
-            if downloaded and os.path.exists(tar_tmp):
-                subprocess.run(["tar", "-xzf", tar_tmp, "--strip-components=1", "-C", install_dir], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                try:
-                    os.remove(tar_tmp)
-                except Exception:
-                    pass
-        print(f"{GREEN}OK{RESET}")
 
-        # Phase 3: Dependencies
-        print(f" • [3/5] Synchronizing dependencies (PEP 668)...", end=" ", flush=True)
+        stage_ok, stage_dir = stage_and_verify_release(tar_url)
+        if not stage_ok and not dev:
+            # Fallback to GitHub archive if release asset is pending
+            archive_url = f"https://github.com/VoxelVoid-0/VexTunnel/archive/refs/tags/{target_ver}.tar.gz"
+            stage_ok, stage_dir = stage_and_verify_release(archive_url)
+
+        if not stage_ok:
+            print(f"{RED}FAILED: {stage_dir}{RESET}")
+            print(f"{RED}[ABORT] Downloaded release failed integrity/syntax check. Core files untouched.{RESET}")
+            restart_tunnel_services(pre_state["active_services"])
+            if not non_interactive:
+                wait_enter()
+            return
+        print(f"{GREEN}OK (Staging Validated & Syntax Verified){RESET}")
+
+        # Phase 2: Code Snapshot & Atomic Promotion
+        print(f" • [2/5] Creating rollback snapshot & promoting codebase...", end=" ", flush=True)
+        code_snap_ok, code_snap_path = create_code_snapshot(install_dir)
+        promo_ok, promo_msg = promote_staging_to_production(stage_dir, install_dir)
+        if not promo_ok:
+            print(f"{RED}FAILED: {promo_msg}{RESET}")
+            print(f"{YELLOW}Initiating emergency code rollback...{RESET}")
+            two_tier_rollback(install_dir, code_snap_path, bkp_path, self.user_mgr.db_path, pre_state["active_services"])
+            if not non_interactive:
+                wait_enter()
+            return
+        print(f"{GREEN}OK (Shields Preserved: .db*, ports.env, certs/){RESET}")
+
+        # Phase 3: Systemd & Dependencies
+        print(f" • [3/5] Syncing systemd units & dependencies (PEP 668)...", end=" ", flush=True)
+        sync_systemd_units(install_dir)
         sync_dependencies(install_dir)
         print(f"{GREEN}OK{RESET}")
 
@@ -708,25 +730,35 @@ class VexTunnelMenu:
         mig_ok = apply_migrations(self.user_mgr.db_path)
         print(f"{GREEN}OK{RESET}" if mig_ok else f"{YELLOW}WARN{RESET}")
 
-        # Phase 5: Service Restart & Health Check
-        print(f" • [5/5] Reloading systemd & verifying services...", end=" ", flush=True)
+        # Phase 5: Service Restart & Deep Socket Health Probe
+        print(f" • [5/5] Reloading daemons & deep socket probing...", end=" ", flush=True)
         restart_tunnel_services(pre_state["active_services"])
-        time.sleep(2)
+        time.sleep(3)  # Settling delay to catch rapid crash loops
         healthy, failed = verify_health(pre_state["active_services"])
-        print(f"{GREEN}HEALTHY ✅{RESET}" if healthy else f"{RED}FAILED ❌{RESET}")
+        sockets_ok, failed_ports = deep_socket_health_check([80, 109])
 
-        if not healthy:
-            action = interactive_rollback_countdown(failed, timeout_sec=15)
+        all_healthy = healthy and sockets_ok
+        if not all_healthy:
+            if not healthy:
+                print(f"{RED}FAILED (Services down: {failed}){RESET}")
+            else:
+                print(f"{RED}FAILED (Sockets unreachable on ports: {failed_ports}){RESET}")
+
+            action = interactive_rollback_countdown(failed if not healthy else [f"port-{p}" for p in failed_ports], timeout_sec=15)
             if action in ('r', 'timeout'):
-                print(f"\n{YELLOW}Executing atomic safe rollback...{RESET}")
-                rollback_update(install_dir, pre_state["commit"], bkp_path, self.user_mgr.db_path, pre_state["active_services"])
+                print(f"\n{YELLOW}Executing Two-Tier safe rollback (Codebase + Database)...{RESET}")
+                two_tier_rollback(install_dir, code_snap_path, bkp_path, self.user_mgr.db_path, pre_state["active_services"])
                 print(f"{GREEN}✅ Server successfully restored to previous stable version ({pre_state['version']})!{RESET}")
-                wait_enter()
+                if not non_interactive:
+                    wait_enter()
                 return
             else:
                 print(f"\n{YELLOW}Rollback cancelled by administrator. Dropping to manual inspection.{RESET}")
-                wait_enter()
+                if not non_interactive:
+                    wait_enter()
                 return
+
+        print(f"{GREEN}HEALTHY ✅ (All daemons active & sockets open){RESET}")
 
         print(f"\n{BOLD}{GREEN}══════════════════════════════════════════════════════════════{RESET}")
         print(f"{BOLD}{GREEN}      ✅ VEXTUNNEL SUCCESSFULLY UPDATED & RUNNING!      {RESET}")

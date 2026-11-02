@@ -1,0 +1,15 @@
+[Unit]
+Description=VexTunnel Async SSH WebSocket Proxy over TLS (Port 443)
+After=network.target dropbear.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/vextunnel/ports.env
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port ${WSS_PORT:-443} --target-port ${DROPBEAR_PORT:-109} --ssl-cert /etc/vextunnel/certs/cert.pem --ssl-key /etc/vextunnel/certs/key.pem --response-code 101
+Restart=always
+RestartSec=3s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

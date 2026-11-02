@@ -21,7 +21,23 @@ if [ "$DIR" != "/etc/vextunnel" ]; then
     cp "$DIR/core/session_enforcer.py" /etc/vextunnel/core/
     cp "$DIR/core/quota_manager.py" /etc/vextunnel/core/
     cp "$DIR/core/monitor.py" /etc/vextunnel/core/
+    cp "$DIR/core/updater.py" /etc/vextunnel/core/ 2>/dev/null || true
     cp "$DIR/cli/menu.py" /etc/vextunnel/cli/
+fi
+
+# Ensure default ports.env exists without clobbering user overrides
+if [ ! -f /etc/vextunnel/ports.env ]; then
+    if [ -f "$DIR/core/ports.env" ]; then
+        cp "$DIR/core/ports.env" /etc/vextunnel/ports.env
+    else
+        cat <<'EOF' > /etc/vextunnel/ports.env
+WS_PORT=80
+WSS_PORT=443
+WS_ALT_PORT=8880
+DROPBEAR_PORT=109
+BADVPN_PORT=7300
+EOF
+    fi
 fi
 
 chmod +x /etc/vextunnel/core/ws_proxy.py
@@ -40,6 +56,11 @@ chmod +x /usr/local/bin/menu
 systemctl stop securetunnel-ws securetunnel-ws-8880 2>/dev/null || true
 systemctl disable securetunnel-ws securetunnel-ws-8880 2>/dev/null || true
 
+# Deploy systemd units from templates if available
+if [ -d "$DIR/install/systemd" ]; then
+    cp "$DIR/install/systemd"/vextunnel-*.service /etc/systemd/system/ 2>/dev/null || true
+fi
+
 # Create Systemd Service for WebSocket Proxy (Port 80 -> Dropbear 109)
 cat <<'EOF' > /etc/systemd/system/vextunnel-ws.service
 [Unit]
@@ -49,7 +70,8 @@ After=network.target dropbear.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port 80 --target-port 109 --response-code 101
+EnvironmentFile=-/etc/vextunnel/ports.env
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port ${WS_PORT:-80} --target-port ${DROPBEAR_PORT:-109} --response-code 101
 Restart=always
 RestartSec=3s
 LimitNOFILE=65536
@@ -67,7 +89,8 @@ After=network.target dropbear.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port 8880 --target-port 109 --response-code 101
+EnvironmentFile=-/etc/vextunnel/ports.env
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port ${WS_ALT_PORT:-8880} --target-port ${DROPBEAR_PORT:-109} --response-code 101
 Restart=always
 RestartSec=3s
 LimitNOFILE=65536
@@ -85,7 +108,8 @@ After=network.target dropbear.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port 443 --target-port 109 --ssl-cert /etc/vextunnel/certs/cert.pem --ssl-key /etc/vextunnel/certs/key.pem --response-code 101
+EnvironmentFile=-/etc/vextunnel/ports.env
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port ${WSS_PORT:-443} --target-port ${DROPBEAR_PORT:-109} --ssl-cert /etc/vextunnel/certs/cert.pem --ssl-key /etc/vextunnel/certs/key.pem --response-code 101
 Restart=always
 RestartSec=3s
 LimitNOFILE=65536

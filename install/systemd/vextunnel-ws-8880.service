@@ -1,0 +1,15 @@
+[Unit]
+Description=VexTunnel Async SSH WebSocket Proxy (Port 8880)
+After=network.target dropbear.service
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=-/etc/vextunnel/ports.env
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/ws_proxy.py --listen-port ${WS_ALT_PORT:-8880} --target-port ${DROPBEAR_PORT:-109} --response-code 101
+Restart=always
+RestartSec=3s
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

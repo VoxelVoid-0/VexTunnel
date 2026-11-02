@@ -1,0 +1,13 @@
+[Unit]
+Description=VexTunnel Real-Time Session Concurrency & Limit Enforcer
+After=network.target dropbear.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/session_enforcer.py
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

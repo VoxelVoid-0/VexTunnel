@@ -8,6 +8,7 @@ tools/
 abuse_report/
 .env
 *.env
+!core/ports.env
 .env.*
 *.pem
 *.key
