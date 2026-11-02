@@ -174,7 +174,8 @@ def backup_database(db_path: str, backup_dir: str = "/etc/vextunnel/backups", ma
         backup_filepath = os.path.join(backup_dir, backup_filename)
 
         # 1. Flush any uncheckpointed WAL frames into main database
-        with sqlite3.connect(db_path, timeout=10.0) as src_conn:
+        src_conn = sqlite3.connect(db_path, timeout=10.0)
+        try:
             try:
                 src_conn.execute("PRAGMA wal_checkpoint(FULL);")
             except Exception as e:
@@ -186,8 +187,13 @@ def backup_database(db_path: str, backup_dir: str = "/etc/vextunnel/backups", ma
                 return False, f"Source database integrity failed: {integrity}"
 
             # 3. Native Online Backup (atomic page copy)
-            with sqlite3.connect(backup_filepath) as dst_conn:
+            dst_conn = sqlite3.connect(backup_filepath)
+            try:
                 src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
+        finally:
+            src_conn.close()
 
         # 4. Rotate old backups (keep latest N)
         try:
@@ -535,9 +541,6 @@ def verify_health(pre_active_services: List[str]) -> Tuple[bool, List[str]]:
     Verify service health against pre-update baseline.
     Avoids false-positive rollbacks for services that were already inactive.
     """
-    if os.name == 'nt':
-        return True, []
-
     failed = []
     # 1. Essential services MUST be running
     for svc in ESSENTIAL_SERVICES:

@@ -78,16 +78,18 @@ class TestUpdater(unittest.TestCase):
         self.assertTrue(os.path.isfile(bkp_file))
 
         # Verify integrity of backup
-        with sqlite3.connect(bkp_file) as conn:
-            rows = conn.execute("SELECT username FROM users;").fetchall()
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0][0], "testuser")
+        conn = sqlite3.connect(bkp_file)
+        rows = conn.execute("SELECT username FROM users;").fetchall()
+        conn.close()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], "testuser")
 
         # 2. Generate 7 dummy backups to test rotation (max 5)
         for i in range(7):
             dummy_path = os.path.join(self.backup_dir, f"vextunnel_2026010{i}_120000.db")
-            with sqlite3.connect(dummy_path) as conn:
-                conn.execute("CREATE TABLE t (id INT);")
+            d_conn = sqlite3.connect(dummy_path)
+            d_conn.execute("CREATE TABLE t (id INT);")
+            d_conn.close()
 
         ok2, bkp2 = backup_database(self.db_path, backup_dir=self.backup_dir, max_backups=5)
         self.assertTrue(ok2)

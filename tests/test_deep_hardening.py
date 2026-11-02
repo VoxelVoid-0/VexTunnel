@@ -223,7 +223,8 @@ class TestDeepHardening(unittest.TestCase):
             "rogueuser": [20001, 20002]
         }
 
-        with patch("core.session_enforcer.get_active_user_sessions", return_value=mock_active), \
+        with patch("os.name", "posix"), \
+             patch("core.session_enforcer.get_active_user_sessions", return_value=mock_active), \
              patch("core.session_enforcer.sync_all_quotas"), \
              patch("os.kill") as mock_kill:
             killed = enforce_concurrency_limits(self.db_path)
@@ -246,10 +247,13 @@ class TestDeepHardening(unittest.TestCase):
         mock_entry_ubuntu = MagicMock(pw_name="ubuntu", pw_uid=1000, pw_shell="/bin/bash")
         mock_entry_root = MagicMock(pw_name="root", pw_uid=0, pw_shell="/bin/bash")
 
-        with patch("os.name", "posix"), \
-             patch("os.geteuid", return_value=0), \
+        mock_pwd = MagicMock()
+        mock_pwd.getpwall.return_value = [mock_entry_registered, mock_entry_leonvpn, mock_entry_ubuntu, mock_entry_root]
+
+        with patch.dict("sys.modules", {"pwd": mock_pwd}), \
+             patch("os.name", "posix"), \
+             patch("os.geteuid", return_value=0, create=True), \
              patch("core.user_manager.DEFAULT_DB_PATH", self.db_path), \
-             patch("pwd.getpwall", return_value=[mock_entry_registered, mock_entry_leonvpn, mock_entry_ubuntu, mock_entry_root]), \
              patch("subprocess.run") as mock_subproc:
             cleaned = self.user_mgr.sync_orphaned_system_users()
             self.assertEqual(cleaned, 1)

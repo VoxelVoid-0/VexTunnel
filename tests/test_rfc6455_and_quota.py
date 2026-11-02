@@ -240,8 +240,7 @@ class TestRFC6455AndQuota(unittest.TestCase):
         """Test sync_all_quotas gracefully handles users with no OS UID without UnboundLocalError."""
         from core.quota_manager import sync_all_quotas
         mgr = UserManager(self.db_path)
-        with mock.patch.object(mgr, "_create_system_user", return_value=True), \
-             mock.patch("pwd.getpwnam", side_effect=KeyError("User not found")):
+        with mock.patch("os.geteuid", return_value=1000, create=True):
             mgr.add_user("nouiduser", "Pass123!", days=30, max_logins=2, quota_bytes=100 * 1024 * 1024)
             with mock.patch("core.quota_manager.get_user_uid", return_value=None):
                 summary = sync_all_quotas(self.db_path)
