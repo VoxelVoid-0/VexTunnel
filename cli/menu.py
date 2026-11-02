@@ -117,10 +117,13 @@ class VexTunnelMenu:
         users = self.user_mgr.list_users()
         active_count = sum(1 for u in users if u["status"] == "active")
         online_count = stats.get("online_users_count", 0)
+        ver = get_installed_version()
 
+        title = f"⚡ VEXTUNNEL SUITE {ver} ⚡"
+        subtitle = "Lightweight SSH-WebSocket Tunnel Manager for Linux"
         print(f"{CYAN}{BOLD}╔══════════════════════════════════════════════════════════════╗{RESET}")
-        print(f"{CYAN}{BOLD}║                  ⚡ VEXTUNNEL SUITE v1.3.0 ⚡                ║{RESET}")
-        print(f"{CYAN}{BOLD}║         Clean • High-Speed • Zero-Backdoor VPS Suite         ║{RESET}")
+        print(f"{CYAN}{BOLD}║{title.center(62)}║{RESET}")
+        print(f"{CYAN}{BOLD}║{subtitle.center(62)}║{RESET}")
         print(f"{CYAN}{BOLD}╚══════════════════════════════════════════════════════════════╝{RESET}")
         print(f" {WHITE}Host / IP :{RESET} {YELLOW}{self.host}{RESET} | {WHITE}OS:{RESET} {stats['os']} | {WHITE}Uptime:{RESET} {GREEN}{stats.get('uptime', 'N/A')}{RESET}")
         print(f" {WHITE}RAM       :{RESET} {make_bar(stats['ram_percent'])} ({stats['ram_used_mb']}MB/{stats['ram_total_mb']}MB)")
@@ -523,7 +526,7 @@ class VexTunnelMenu:
 
     def telegram_alerts_and_backup_hub(self):
         self.print_banner()
-        print(f"\n{BOLD}{CYAN}=== TELEGRAM BOT ALERTS & BACKUP HUB ==={RESET}\n")
+        print(f"\n{BOLD}{CYAN}=== TELEGRAM NOTIFICATIONS & BACKUPS ==={RESET}\n")
         cfg = get_telegram_config()
         configured = bool(cfg.get("bot_token") and cfg.get("chat_id"))
         status_tag = f"{GREEN}● CONFIGURED{RESET}" if configured else f"{YELLOW}○ NOT CONFIGURED{RESET}"
@@ -610,7 +613,7 @@ class VexTunnelMenu:
 
     def check_and_apply_update(self, non_interactive: bool = False, force: bool = False, dev: bool = False):
         self.print_banner()
-        print(f"\n{BOLD}{GREEN}=== VEXTUNNEL SAFE UPDATE & MIGRATION HUB (v6) ==={RESET}\n")
+        print(f"\n{BOLD}{GREEN}=== VEXTUNNEL SOFTWARE UPDATE ==={RESET}\n")
 
         install_dir = "/etc/vextunnel" if os.path.exists("/etc/vextunnel") else os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         pre_state = capture_pre_update_state(db_path=self.user_mgr.db_path, repo_dir=install_dir)
@@ -668,7 +671,7 @@ class VexTunnelMenu:
             if confirm in ('n', 'no'):
                 return
 
-        print(f"\n{BOLD}Starting automated 5-phase update pipeline (v6 - Clean Stop Standard)...{RESET}")
+        print(f"\n{BOLD}Starting automated 5-phase update pipeline...{RESET}")
 
         # Phase 1: Database Isolation & Staging Download
         print(f" • [1/5] Cleanly stopping services & securing database...", end=" ", flush=True)
@@ -791,8 +794,8 @@ class VexTunnelMenu:
                 print(f"  {CYAN}11){RESET} Restart All Tunnel Services")
                 print(f"  {CYAN}12){RESET} Domain & SSL Certificate Settings")
                 print(f"  {CYAN}13){RESET} VPS Bandwidth Speedtest")
-                print(f"  {CYAN}14){RESET} Telegram Bot Alerts & Backup Hub")
-                print(f"  {CYAN}15){RESET} Check for Updates & Self-Upgrade")
+                print(f"  {CYAN}14){RESET} Telegram Notifications & Backups")
+                print(f"  {CYAN}15){RESET} Check for Updates")
                 print(f"")
                 print(f"  {RED}0){RESET} Exit")
                 print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")

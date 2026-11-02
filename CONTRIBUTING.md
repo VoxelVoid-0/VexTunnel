@@ -1,27 +1,33 @@
-# 🤝 Contributing to VexTunnel
+# Contributing to VexTunnel
 
-Thank you for your interest in contributing to **VexTunnel**! We welcome bug fixes, performance improvements, and documentation enhancements from the open-source community.
+Thank you for your interest in contributing to **VexTunnel**! We welcome bug fixes, performance improvements, and documentation enhancements.
 
-To maintain our core promise of **Zero-Backdoor, High-Performance, and Clean Production Code**, please review the following guidelines before submitting a pull request.
-
----
-
-## 📜 Core Contribution Principles
-
-1. **Zero External Dependencies in Core**:
-   - `core/` and `cli/` must run strictly using the **Python Standard Library** (no heavy external pip dependencies like `requests`, `aiohttp`, etc.).
-   - This ensures instant zero-delay installation on fresh VPS instances with zero supply-chain risk.
-
-2. **Absolute Transparency & No Obfuscated Code**:
-   - Never submit pre-compiled binaries, base64-encoded shell strings, or encrypted scripts.
-   - All shell scripts in `install/` must be 100% human-readable and pass ShellCheck.
-
-3. **Strict Input Sanitization**:
-   - All user inputs (usernames, passwords, ports, domains) must be validated to prevent command injection (`admin; rm -rf /`) and SQL injection.
+Please review the guidelines below to ensure a smooth contribution process.
 
 ---
 
-## 🛠️ Local Development & Testing
+## Architecture & Engineering Standards
+
+To keep VexTunnel lightweight, reliable, and easily maintainable across Debian and Ubuntu distributions, all contributions should follow these principles:
+
+1. **Python Standard Library in Core:**
+   - Modules in `core/` and `cli/` should rely strictly on the **Python Standard Library** (e.g., `asyncio`, `socket`, `sqlite3`, `urllib`, `argparse`).
+   - Avoid adding external pip dependencies to core modules so that fresh VPS installations remain fast, lean, and self-contained.
+
+2. **Decoupled Configuration:**
+   - Network ports must remain configurable via `/etc/vextunnel/ports.env`.
+   - Never hardcode ports directly in systemd `.service` files; use `Environment="PORT=..."` and `$PORT` expansion.
+
+3. **Database Schema Compatibility:**
+   - Any changes to the SQLite database schema must be idempotent and backward-compatible.
+   - Use `PRAGMA table_info` to detect existing columns and apply migrations without data loss.
+
+4. **Input Sanitization & Security:**
+   - All user inputs (usernames, passwords, ports, domains) must be validated to prevent shell command injection and SQL injection.
+
+---
+
+## Local Development & Testing
 
 ### 1. Fork & Clone Repository
 ```bash
@@ -30,50 +36,41 @@ cd VexTunnel
 git checkout -b feat/your-feature-name
 ```
 
-### 2. Run Automated Test Suite
-Before submitting any changes, ensure all unit and security tests pass:
+### 2. Run the Automated Test Suite
+Before submitting any changes, ensure all unit tests pass:
 ```bash
-python -m unittest discover -s tests -v
+python3 -m unittest discover tests
 ```
 
-### 3. Run Shell Script Linter (ShellCheck)
+### 3. Lint Shell Scripts
 If you modify any shell scripts in `install/` or `install.sh`:
 ```bash
 shellcheck -e SC2034,SC2181 install/*.sh install.sh
 ```
 
-### 4. Run Python Security Audit (Bandit)
-Ensure your code introduces zero security vulnerabilities:
-```bash
-pip install bandit
-bandit -r core/ cli/ -ll
-```
-
 ---
 
-## 🌿 Git Branching & Pull Request Process
+## Git Workflow & Pull Requests
 
-1. **Branching Strategy**:
-   - `main`: Production-ready, stable releases.
-   - `develop`: Active development and feature staging.
-   - Always base your feature or bugfix branches off **`develop`**!
+1. **Target Branch:**
+   - VexTunnel uses a **Single-Branch (`main`)** distribution model. All feature branches and pull requests should target **`main`**.
 
-2. **Commit Conventions**:
-   - Use Conventional Commits formatting:
+2. **Commit Conventions:**
+   - We follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
      - `feat: add support for custom cipher suites`
      - `fix: resolve dropbear pid parsing edge-case`
      - `docs: update installation instructions in README`
      - `test: add unit tests for port conflict validator`
+     - `refactor: simplify socket connection logic`
 
-3. **Submitting a Pull Request**:
-   - Target the **`develop`** branch for PRs.
-   - Provide a clear description of the problem solved and testing steps performed.
-   - Ensure all automated GitHub Actions CI checks pass.
+3. **Submitting a Pull Request:**
+   - Open a PR against the `main` branch.
+   - Fill out the provided [Pull Request Template](.github/pull_request_template.md).
+   - Ensure all automated GitHub Actions CI checks pass green.
 
 ---
 
-## 🐞 Reporting Issues
+## Reporting Issues & Security
 
-- **Bug Reports**: Use our [Bug Report Template](.github/ISSUE_TEMPLATE/bug_report.md) with full logs, OS details, and reproduction steps.
-- **Feature Requests**: Use our [Feature Request Template](.github/ISSUE_TEMPLATE/feature_request.md).
-- **Security Vulnerabilities**: Please follow our [Security Policy](SECURITY.md) and report privately via [GitHub Security Advisories](https://github.com/VoxelVoid-0/VexTunnel/security/advisories/new).
+- **Bug Reports & Feature Requests:** Please use the issue templates provided in `.github/ISSUE_TEMPLATE/`.
+- **Security Vulnerabilities:** Follow our [Security Policy](SECURITY.md) and report vulnerabilities privately through [GitHub Security Advisories](https://github.com/VoxelVoid-0/VexTunnel/security/advisories/new).

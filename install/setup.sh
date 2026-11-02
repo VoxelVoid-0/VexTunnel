@@ -3,7 +3,7 @@
 # ⚡ VexTunnel Suite - Master VPS Installer ⚡
 # Author : VoxelVoid-0 (https://github.com/VoxelVoid-0/VexTunnel)
 # Supported OS: Debian 10+ / Ubuntu 20.04+
-# 100% Open-Source • Zero-Backdoor • Clean Production Ready
+# Open-Source SSH-WebSocket Tunnel Suite for Linux
 # ==========================================================
 set -euo pipefail
 
@@ -18,8 +18,8 @@ BOLD='\033[1m'
 clear 2>/dev/null || true
 echo -e "${CYAN}${BOLD}"
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║                  ⚡ VEXTUNNEL SUITE v1.3.0 ⚡                ║"
-echo "║          Clean • Modern • Zero-Backdoor VPS Tunnel           ║"
+echo "║                    ⚡ VEXTUNNEL SUITE ⚡                     ║"
+echo "║        Lightweight SSH-WebSocket Tunnel Suite for Linux      ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
@@ -143,5 +143,5 @@ echo -e " ${BOLD}BadVPN UDPGW     :${NC} 7300"
 echo -e " ${BOLD}Firewall (UFW)   :${NC} ${GREEN}[ACTIVE & HARDENED]${NC}"
 echo -e " ${BOLD}Telemetry / Leaks:${NC} ${GREEN}[NONE - 100% PRIVATE]${NC}"
 echo -e "──────────────────────────────────────────────────────────────"
-echo -e "${CYAN}${BOLD}Type 'menu' anytime in terminal to launch the management hub!${NC}"
+echo -e "${CYAN}${BOLD}Type 'menu' anytime in terminal to access the management interface.${NC}"
 echo -e "──────────────────────────────────────────────────────────────"

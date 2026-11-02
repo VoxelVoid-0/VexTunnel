@@ -27,7 +27,7 @@ main() {
 
     echo -e "${CYAN}${BOLD}"
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║       ⚡ VEXTUNNEL SAFE UPDATE & MIGRATION HUB (v6) ⚡       ║"
+    echo "║                ⚡ VEXTUNNEL SOFTWARE UPDATE ⚡               ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
 
@@ -76,7 +76,7 @@ main() {
     fi
 
     # Phase 1: Clean Service Stop & Staging Download
-    echo -e "\n${BOLD}Starting automated 5-phase update pipeline (v6 - Clean Stop Standard)...${NC}"
+    echo -e "\n${BOLD}Starting automated 5-phase update pipeline...${NC}"
     echo -e "${GREEN}==> [1/5] Cleanly stopping services & securing SQLite database...${NC}"
 
     # Clean stop upfront (3x-ui standard) to eliminate file swap race conditions & DB locks
