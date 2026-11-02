@@ -234,18 +234,20 @@ class TestDeepHardening(unittest.TestCase):
 
     def test_08_sync_orphaned_system_users(self):
         """Verify sync_orphaned_system_users purges Linux accounts with restricted shells not present in DB."""
-        # DB has 'minsara'
-        self.user_mgr.add_user("minsara", "ValidPass123", days=30)
+        # Insert 'registered_user' directly into test DB
+        with self.user_mgr._get_connection() as conn:
+            conn.execute("INSERT INTO users (username, password_hash, expires_at, status) VALUES ('registered_user', 'hash', '2030-01-01', 'active')")
+            conn.commit()
 
-        # Mock pwd entries: minsara (registered), leonvpn (orphaned), ubuntu (admin), root (system)
-        mock_entry_minsara = MagicMock(pw_name="minsara", pw_uid=1001, pw_shell="/bin/false")
+        # Mock pwd entries: registered_user (valid), leonvpn (orphaned), ubuntu (admin), root (system)
+        mock_entry_registered = MagicMock(pw_name="registered_user", pw_uid=1001, pw_shell="/bin/false")
         mock_entry_leonvpn = MagicMock(pw_name="leonvpn", pw_uid=1002, pw_shell="/bin/false")
         mock_entry_ubuntu = MagicMock(pw_name="ubuntu", pw_uid=1000, pw_shell="/bin/bash")
         mock_entry_root = MagicMock(pw_name="root", pw_uid=0, pw_shell="/bin/bash")
 
         with patch("os.name", "posix"), \
              patch("os.geteuid", return_value=0), \
-             patch("pwd.getpwall", return_value=[mock_entry_minsara, mock_entry_leonvpn, mock_entry_ubuntu, mock_entry_root]), \
+             patch("pwd.getpwall", return_value=[mock_entry_registered, mock_entry_leonvpn, mock_entry_ubuntu, mock_entry_root]), \
              patch("subprocess.run") as mock_subproc:
             cleaned = self.user_mgr.sync_orphaned_system_users()
             self.assertEqual(cleaned, 1)
