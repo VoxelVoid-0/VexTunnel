@@ -33,7 +33,7 @@ class TestRFC6455AndQuota(unittest.TestCase):
         self.db_path = os.path.join(self.test_dir, "test_vextunnel.db")
 
     def tearDown(self):
-        for u in ["testalice", "legacybob", "authuser", "quotauser"]:
+        for u in ["testalice", "legacybob", "authuser", "quotauser", "nouiduser"]:
             try:
                 if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
                     import subprocess
@@ -240,12 +240,15 @@ class TestRFC6455AndQuota(unittest.TestCase):
         """Test sync_all_quotas gracefully handles users with no OS UID without UnboundLocalError."""
         from core.quota_manager import sync_all_quotas
         mgr = UserManager(self.db_path)
-        mgr.add_user("nouiduser", "Pass123!", days=30, max_logins=2, quota_bytes=100 * 1024 * 1024)
-
-        with mock.patch("core.quota_manager.get_user_uid", return_value=None):
-            summary = sync_all_quotas(self.db_path)
-            self.assertIn("nouiduser", summary)
-            self.assertEqual(summary["nouiduser"]["status"], "active")
+        mgr.delete_user("nouiduser")
+        try:
+            mgr.add_user("nouiduser", "Pass123!", days=30, max_logins=2, quota_bytes=100 * 1024 * 1024)
+            with mock.patch("core.quota_manager.get_user_uid", return_value=None):
+                summary = sync_all_quotas(self.db_path)
+                self.assertIn("nouiduser", summary)
+                self.assertEqual(summary["nouiduser"]["status"], "active")
+        finally:
+            mgr.delete_user("nouiduser")
 
 if __name__ == "__main__":
     unittest.main()
