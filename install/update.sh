@@ -75,12 +75,14 @@ main() {
         echo -e " ${BOLD}Target Release     :${NC} ${GREEN}${TARGET_VERSION}${NC}"
     fi
 
-    # Phase 1: Database Isolation & Staging Download
-    echo -e "\n${BOLD}Starting automated 5-phase update pipeline (v6)...${NC}"
-    echo -e "${GREEN}==> [1/5] Freezing DB writes, backing up SQLite database & staging release...${NC}"
+    # Phase 1: Clean Service Stop & Staging Download
+    echo -e "\n${BOLD}Starting automated 5-phase update pipeline (v6 - Clean Stop Standard)...${NC}"
+    echo -e "${GREEN}==> [1/5] Cleanly stopping services & securing SQLite database...${NC}"
 
-    # Early pause enforcer to stop DB writes without disconnecting user tunnels
-    systemctl stop vextunnel-enforcer 2>/dev/null || true
+    # Clean stop upfront (3x-ui standard) to eliminate file swap race conditions & DB locks
+    for svc in "${ACTIVE_SERVICES[@]}"; do
+        systemctl stop "$svc" 2>/dev/null || true
+    done
 
     # SQLite native online backup
     DB_PATH="$INSTALL_DIR/vextunnel.db"
@@ -98,8 +100,10 @@ with sqlite3.connect('$DB_PATH', timeout=10.0) as src:
     with sqlite3.connect('$BACKUP_FILE') as dst:
         src.backup(dst)
 " || {
-            echo -e "${RED}[ERROR] Native SQLite backup failed! Restarting enforcer and aborting.${NC}"
-            systemctl start vextunnel-enforcer 2>/dev/null || true
+            echo -e "${RED}[ERROR] Native SQLite backup failed! Restarting services and aborting.${NC}"
+            for svc in "${ACTIVE_SERVICES[@]}"; do
+                systemctl start "$svc" 2>/dev/null || true
+            done
             exit 1
         }
         echo -e "${GREEN}  ✓ SQLite native backup secured: $(basename "$BACKUP_FILE")${NC}"
@@ -157,7 +161,9 @@ for root, _, files in os.walk(scan_dir):
 " || {
         echo -e "${RED}[ABORT] Staging integrity or Python syntax verification failed!${NC}"
         rm -rf "$STAGING_DIR"
-        systemctl start vextunnel-enforcer 2>/dev/null || true
+        for svc in "${ACTIVE_SERVICES[@]}"; do
+            systemctl start "$svc" 2>/dev/null || true
+        done
         exit 1
     }
     echo -e "${GREEN}  ✓ Staging package validated and syntax verified (py_compile OK)${NC}"
@@ -227,11 +233,11 @@ UserManager('$DB_PATH')
 print('  ✓ Database migrations verified OK')
 "
 
-    # Phase 5: Service Restart & Deep Socket Health Check
-    echo -e "${GREEN}==> [5/5] Reloading daemons & deep socket health probing...${NC}"
+    # Phase 5: Clean Cold Start & Deep Socket Health Check
+    echo -e "${GREEN}==> [5/5] Clean cold start of services & deep socket health probing...${NC}"
     systemctl daemon-reload
     for svc in "${ACTIVE_SERVICES[@]}"; do
-        systemctl restart "$svc" 2>/dev/null || true
+        systemctl start "$svc" 2>/dev/null || true
     done
     systemctl start vextunnel-enforcer 2>/dev/null || true
 

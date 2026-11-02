@@ -484,14 +484,17 @@ def stop_tunnel_services(services: List[str]) -> bool:
     return True
 
 def start_tunnel_services(services: List[str]) -> bool:
-    """Start designated tunnel services."""
+    """Start designated tunnel services cleanly from cold state."""
     if os.name == 'nt':
         return True
     try:
         subprocess.run(["systemctl", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
-    for svc in services:
+    svcs = list(services)
+    if "vextunnel-enforcer" not in svcs and "vextunnel-enforcer" in CORE_SERVICES:
+        svcs.append("vextunnel-enforcer")
+    for svc in svcs:
         try:
             subprocess.run(["systemctl", "start", svc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:

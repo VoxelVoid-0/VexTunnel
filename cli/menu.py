@@ -30,7 +30,8 @@ from core.updater import (
     interactive_rollback_countdown, rollback_update, reexec_menu,
     get_installed_version, check_disk_space, pause_enforcer_for_migration,
     create_code_snapshot, stage_and_verify_release, promote_staging_to_production,
-    sync_systemd_units, deep_socket_health_check, two_tier_rollback
+    sync_systemd_units, deep_socket_health_check, two_tier_rollback,
+    stop_tunnel_services, start_tunnel_services
 )
 
 # Terminal Color Codes
@@ -667,12 +668,12 @@ class VexTunnelMenu:
             if confirm in ('n', 'no'):
                 return
 
-        print(f"\n{BOLD}Starting automated 5-phase update pipeline (v6)...{RESET}")
+        print(f"\n{BOLD}Starting automated 5-phase update pipeline (v6 - Clean Stop Standard)...{RESET}")
 
         # Phase 1: Database Isolation & Staging Download
-        print(f" • [1/5] Isolating database & verifying staging package...", end=" ", flush=True)
-        # Freeze DB writes early without dropping WS tunnels
-        pause_enforcer_for_migration()
+        print(f" • [1/5] Cleanly stopping services & securing database...", end=" ", flush=True)
+        # Clean Stop: Stop running services upfront (3x-ui enterprise standard)
+        stop_tunnel_services(pre_state["active_services"])
 
         # Create SQLite native online backup
         backup_dir = os.path.join(install_dir, "backups")
@@ -680,7 +681,7 @@ class VexTunnelMenu:
         if not bkp_ok:
             print(f"{RED}FAILED: {bkp_path}{RESET}")
             print(f"{RED}[ABORT] Update stopped to protect database.{RESET}")
-            restart_tunnel_services(pre_state["active_services"])
+            start_tunnel_services(pre_state["active_services"])
             if not non_interactive:
                 wait_enter()
             return
@@ -700,7 +701,7 @@ class VexTunnelMenu:
         if not stage_ok:
             print(f"{RED}FAILED: {stage_dir}{RESET}")
             print(f"{RED}[ABORT] Downloaded release failed integrity/syntax check. Core files untouched.{RESET}")
-            restart_tunnel_services(pre_state["active_services"])
+            start_tunnel_services(pre_state["active_services"])
             if not non_interactive:
                 wait_enter()
             return
@@ -731,8 +732,8 @@ class VexTunnelMenu:
         print(f"{GREEN}OK{RESET}" if mig_ok else f"{YELLOW}WARN{RESET}")
 
         # Phase 5: Service Restart & Deep Socket Health Probe
-        print(f" • [5/5] Reloading daemons & deep socket probing...", end=" ", flush=True)
-        restart_tunnel_services(pre_state["active_services"])
+        print(f" • [5/5] Clean cold start & deep socket health probing...", end=" ", flush=True)
+        start_tunnel_services(pre_state["active_services"])
         time.sleep(3)  # Settling delay to catch rapid crash loops
         healthy, failed = verify_health(pre_state["active_services"])
         sockets_ok, failed_ports = deep_socket_health_check([80, 109])
