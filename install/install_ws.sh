@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 # VexTunnel - WebSocket Proxy Systemd Setup
-# Author: VexElvn
+# Author: VoxelVoid-0
 # ==========================================================
 set -euo pipefail
 

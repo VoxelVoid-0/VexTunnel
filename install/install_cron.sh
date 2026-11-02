@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 # VexTunnel - Safe Automated Account Expiry Service
-# Author: VexElvn
+# Author: VoxelVoid-0
 # ==========================================================
 set -euo pipefail
 

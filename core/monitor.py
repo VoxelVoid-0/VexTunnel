@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 VexTunnel - System & Service Monitor
-Author: VexElvn
+Author: VoxelVoid-0
 License: GPL-3.0
 """
 

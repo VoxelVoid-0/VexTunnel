@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 # VexTunnel - Clean OpenSSH & Dropbear Configurator
-# Author: VexElvn
+# Author: VoxelVoid-0
 # ==========================================================
 set -euo pipefail
 

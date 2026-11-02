@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==========================================================
 # VexTunnel - Clean BadVPN-UDPGW Builder & Service Setup
-# Author: VexElvn
+# Author: VoxelVoid-0
 # ==========================================================
 set -euo pipefail
 
