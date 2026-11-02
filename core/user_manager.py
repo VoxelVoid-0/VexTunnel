@@ -401,7 +401,10 @@ class UserManager:
 
     def sync_orphaned_system_users(self) -> int:
         """Lock or remove orphaned Linux accounts with restricted shells that are not registered in VexTunnel."""
+        # Authoritative safety gate: ONLY run on Linux as root against the primary production database
         if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
+            return 0
+        if self.db_path != DEFAULT_DB_PATH:
             return 0
 
         cleaned = 0

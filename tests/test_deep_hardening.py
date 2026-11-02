@@ -248,6 +248,7 @@ class TestDeepHardening(unittest.TestCase):
 
         with patch("os.name", "posix"), \
              patch("os.geteuid", return_value=0), \
+             patch("core.user_manager.DEFAULT_DB_PATH", self.db_path), \
              patch("pwd.getpwall", return_value=[mock_entry_registered, mock_entry_leonvpn, mock_entry_ubuntu, mock_entry_root]), \
              patch("subprocess.run") as mock_subproc:
             cleaned = self.user_mgr.sync_orphaned_system_users()
