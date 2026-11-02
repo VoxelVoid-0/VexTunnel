@@ -33,7 +33,7 @@ class TestRFC6455AndQuota(unittest.TestCase):
         self.db_path = os.path.join(self.test_dir, "test_vextunnel.db")
 
     def tearDown(self):
-        for u in ["testalice", "legacybob", "authuser", "quotauser", "nouiduser"]:
+        for u in ["testalice", "legacybob", "authuser", "quotauser", "nouiduser", "lockedquota", "expiredquota"]:
             try:
                 if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
                     import subprocess
@@ -186,6 +186,40 @@ class TestRFC6455AndQuota(unittest.TestCase):
 
         # Auth succeeds after reset
         self.assertTrue(mgr.authenticate_user("quotauser", "SecretPass123"))
+
+    def test_quota_reset_preserves_locked_status(self):
+        """Verify resetting quota on an administratively locked user does not reactivate account."""
+        mgr = UserManager(self.db_path)
+        mgr.add_user("lockedquota", "SecretPass123", 30, quota_bytes=1000)
+        mgr.lock_user("lockedquota")
+
+        # Confirm locked
+        self.assertFalse(mgr.authenticate_user("lockedquota", "SecretPass123"))
+
+        # Reset quota
+        self.assertTrue(reset_user_quota("lockedquota", self.db_path))
+
+        users = mgr.list_users()
+        lu = next(u for u in users if u["username"] == "lockedquota")
+        self.assertEqual(lu["used_bytes"], 0)
+        self.assertEqual(lu["status"], "locked", "Locked status must NOT be overridden to active on quota reset")
+        self.assertEqual(lu["quota_status"], "active")
+
+    def test_quota_reset_preserves_expired_status(self):
+        """Verify resetting quota on an expired account preserves expired status and denies unblock."""
+        mgr = UserManager(self.db_path)
+        # Add user that expired yesterday (-1 day)
+        mgr.add_user("expiredquota", "SecretPass123", -1, quota_bytes=1000)
+
+        self.assertFalse(mgr.authenticate_user("expiredquota", "SecretPass123"))
+
+        # Reset quota
+        self.assertTrue(reset_user_quota("expiredquota", self.db_path))
+
+        users = mgr.list_users()
+        eu = next(u for u in users if u["username"] == "expiredquota")
+        self.assertEqual(eu["used_bytes"], 0)
+        self.assertEqual(eu["status"], "expired", "Expired account must NOT be reactivated on quota reset")
 
     def test_migration_fails_hard_on_unhashable_legacy_row(self):
         """Test that unhashable legacy rows trigger strict transaction rollback without silent fallback."""

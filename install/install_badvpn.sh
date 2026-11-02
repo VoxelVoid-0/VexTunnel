@@ -18,9 +18,12 @@ if [ ! -f /usr/local/bin/badvpn-udpgw ]; then
     TMPDIR=$(mktemp -d)
     cd "$TMPDIR"
 
-    if curl -sL --connect-timeout 15 --max-time 60 https://github.com/ambrop72/badvpn/archive/refs/heads/master.tar.gz | tar -xz 2>/dev/null; then
-        if [ -d "badvpn-master" ]; then
-            cd badvpn-master
+    # Attempt build from official release archive
+    if curl -sL --connect-timeout 15 --max-time 60 https://github.com/ambrop72/badvpn/archive/refs/tags/1.999.130.tar.gz | tar -xz 2>/dev/null || \
+       curl -sL --connect-timeout 15 --max-time 60 https://github.com/ambrop72/badvpn/archive/refs/heads/master.tar.gz | tar -xz 2>/dev/null; then
+        SRC_DIR=$(find . -maxdepth 1 -type d -name "badvpn*" | head -n 1)
+        if [ -n "$SRC_DIR" ] && [ -d "$SRC_DIR" ]; then
+            cd "$SRC_DIR"
             # Modern CMake Compatibility:
             # Newer CMake versions (>= 3.30 / 4.0) remove support for legacy cmake_minimum_required(VERSION 2.8)
             # Patch CMakeLists.txt to require 3.10 to prevent 'Compatibility with CMake < 3.5 has been removed from CMake'
@@ -40,11 +43,8 @@ if [ ! -f /usr/local/bin/badvpn-udpgw ]; then
     cd /
     rm -rf "$TMPDIR"
 
-    # Fallback to pre-compiled verified binary if compilation failed or is unsupported
     if [ "$BUILD_SUCCESS" -ne 1 ] && [ ! -f /usr/local/bin/badvpn-udpgw ]; then
-        echo "==> Source compilation failed or unsupported; falling back to verified pre-compiled binary..."
-        curl -sL --connect-timeout 15 -o /usr/local/bin/badvpn-udpgw https://raw.githubusercontent.com/daybreakersx/premscript/master/badvpn-udpgw64 2>/dev/null || true
-        chmod 755 /usr/local/bin/badvpn-udpgw 2>/dev/null || true
+        echo "==> Warning: badvpn-udpgw compilation did not complete. Check build toolchain."
     fi
 fi
 

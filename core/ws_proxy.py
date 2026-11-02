@@ -205,8 +205,8 @@ class SSHWebSocketProxy:
         client_addr = client_writer.get_extra_info('peername')
         client_ip = extract_ip(client_addr)
 
-        # 1. Global Connection Admission Gate
-        if self.semaphore.locked():
+        # 1. Global Connection Admission Gate (Per-Daemon Process Scope)
+        if self.active_connections >= self.max_conns or self.semaphore.locked():
             logger.warning(f"Connection budget exhausted ({self.max_conns}). Rejecting client from {client_addr}")
             client_writer.close()
             return
@@ -218,9 +218,11 @@ class SSHWebSocketProxy:
             client_writer.close()
             return
 
+        admitted = False
         try:
             async with self.semaphore:
                 self.active_connections += 1
+                admitted = True
                 logger.info(f"Accepted connection from {client_addr} (Active: {self.active_connections}/{self.max_conns}, IP conns: {self.rate_limiter.active_conns.get(client_ip, 1)})")
 
                 # Apply kernel socket tuning to client socket
@@ -313,22 +315,11 @@ class SSHWebSocketProxy:
 
                     # 4. Bi-Directional Asynchronous Stream Pipes with Backpressure Control
                     async def pipe_client_to_ssh():
-                        nonlocal ssh_started
                         try:
                             while True:
                                 data = await client_reader.read(BUFFER_SIZE)
                                 if not data:
                                     break
-
-                                # Filter out any multi-chunk HTTP noise before raw SSH stream starts
-                                if not ssh_started:
-                                    s_data = data.lstrip()
-                                    if any(s_data.startswith(p) for p in HTTP_PREFIXES):
-                                        logger.info(f"Absorbing fragmented HTTP noise from {client_addr} ({len(data)} bytes)")
-                                        continue
-                                    else:
-                                        ssh_started = True
-
                                 target_writer.write(data)
                                 await target_writer.drain()
                         except (asyncio.CancelledError, ConnectionResetError, BrokenPipeError):
@@ -358,12 +349,16 @@ class SSHWebSocketProxy:
                     task_c2s = asyncio.create_task(pipe_client_to_ssh())
                     task_s2c = asyncio.create_task(pipe_ssh_to_client())
 
-                    await asyncio.wait([task_c2s, task_s2c], return_when=asyncio.FIRST_COMPLETED)
+                    # Deterministic teardown: when one stream ends, cleanly cancel and gather sibling
+                    done, pending = await asyncio.wait([task_c2s, task_s2c], return_when=asyncio.FIRST_COMPLETED)
+                    for t in pending:
+                        t.cancel()
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
 
                 except Exception as e:
                     logger.debug(f"Connection exception from {client_addr}: {e}")
                 finally:
-                    self.active_connections -= 1
                     logger.info(f"Terminated session for {client_addr} (Active: {self.active_connections})")
 
                     # Close both streams cleanly
@@ -374,6 +369,8 @@ class SSHWebSocketProxy:
                             except Exception:
                                 pass
         finally:
+            if admitted:
+                self.active_connections -= 1
             self.rate_limiter.release(client_ip)
 
     async def start(self):

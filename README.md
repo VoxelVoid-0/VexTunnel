@@ -13,9 +13,10 @@ A fast, lightweight SSH-over-WebSocket proxy and tunneling manager for Linux VPS
 
 ## Features
 
-* **Async WebSocket Engine (RFC 6455):**
+* **Async WebSocket & Payload Ingress Engine:**
   - Non-blocking I/O powered by Python `asyncio`.
-  - Dynamic `Sec-WebSocket-Accept` computation via RFC 6455 specification.
+  - Dynamic `Sec-WebSocket-Accept` computation via RFC 6455 handshake specification.
+  - Lossless bidirectional stream forwarding optimized for HTTP Custom, NapsternetV, NetMod, and DarkTunnel.
   - Supports custom CDN bug hosts and WebSocket upgrade headers (`Upgrade: websocket`).
   - Standard HTTP ingress on port `80` and `8880`, with native TLS/WSS termination on port `443`.
 

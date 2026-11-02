@@ -96,6 +96,21 @@ class TestWSProxy(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             asyncio.run(ssl_proxy.start())
 
+    def test_admission_budget_rejection(self):
+        """Verify client is rejected immediately if active_connections reaches max_conns."""
+        import asyncio
+        from unittest.mock import MagicMock
+        proxy = SSHWebSocketProxy("127.0.0.1", 8080, "127.0.0.1", 109, max_conns=1)
+        proxy.active_connections = 1  # Simulate at capacity
+
+        mock_reader = MagicMock()
+        mock_writer = MagicMock()
+        mock_writer.get_extra_info.return_value = ("192.168.1.50", 12345)
+
+        asyncio.run(proxy.handle_client(mock_reader, mock_writer))
+        mock_writer.close.assert_called_once()
+        self.assertEqual(proxy.active_connections, 1, "active_connections must not be corrupted or decremented on rejection")
+
 if __name__ == "__main__":
     unittest.main()
 

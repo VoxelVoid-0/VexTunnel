@@ -137,21 +137,26 @@ def setup_anti_abuse_firewall(ports: list = None, rate_per_min: int = 60, burst:
         return False
 
 def setup_accounting_rule(uid: int) -> bool:
-    """Ensure iptables VEXTUNNEL_QUOTA rule exists for this UID to count outgoing traffic."""
+    """Ensure iptables VEXTUNNEL_QUOTA passive counter rule exists for this UID without terminal verdicts."""
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
         init_firewall_chains()
+        # Clean up legacy -j ACCEPT rule if present to avoid short-circuiting downstream OUTPUT policies
+        subprocess.run(
+            ["iptables", "-D", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
         check = subprocess.run(
-            ["iptables", "-C", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"],
+            ["iptables", "-C", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         if check.returncode != 0:
             subprocess.run(
-                ["iptables", "-A", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"],
+                ["iptables", "-A", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid)],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
-            logger.info(f"Initialized iptables accounting rule for UID {uid} in VEXTUNNEL_QUOTA")
+            logger.info(f"Initialized iptables passive accounting rule for UID {uid} in VEXTUNNEL_QUOTA")
         return True
     except Exception as e:
         logger.debug(f"Failed to setup accounting rule for UID {uid}: {e}")
@@ -375,46 +380,65 @@ def sync_all_quotas(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Dict]:
     return summary
 
 def reset_user_quota(username: str, db_path: str = DEFAULT_DB_PATH) -> bool:
-    """Reset bandwidth counters and re-enable active network access for user."""
+    """Reset bandwidth counters and safely re-enable active network access for user."""
     username = username.strip().lower()
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         conn = sqlite3.connect(db_path, timeout=10.0)
+        
+        # Verify account status and expiry before any state transitions
+        row = conn.execute("SELECT status, expires_at FROM users WHERE username = ?", (username,)).fetchone()
+        if not row:
+            conn.close()
+            return False
+        current_status, exp_str = row
+        
+        is_expired = False
+        if exp_str:
+            try:
+                is_expired = datetime.datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S") <= datetime.datetime.now()
+            except ValueError:
+                pass
+
+        uid = get_user_uid(username)
+        current_cnt = read_uid_bytes(uid) if (uid is not None and uid > 0) else 0
+
         cols = [c[1] for c in conn.execute("PRAGMA table_info(users)").fetchall()]
         has_last_counter = "last_counter_bytes" in cols
         has_last_alert = "last_quota_alert_pct" in cols
         has_quota_status = "quota_status" in cols
 
+        # Update quota baseline safely: restore active only if previously active/quota_exceeded and not expired
+        new_status = 'active' if (current_status in ('active', 'quota_exceeded') and not is_expired) else (
+            'expired' if is_expired else current_status
+        )
+
         if has_last_counter and has_quota_status:
             if has_last_alert:
                 cur = conn.execute("""
-                    UPDATE users SET used_bytes = 0, last_counter_bytes = 0, last_quota_alert_pct = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
+                    UPDATE users SET used_bytes = 0, last_counter_bytes = ?, last_quota_alert_pct = 0, quota_status = 'active', status = ?, last_quota_sync = ?
                     WHERE username = ?
-                """, (now_str, username))
+                """, (current_cnt, new_status, now_str, username))
             else:
                 cur = conn.execute("""
-                    UPDATE users SET used_bytes = 0, last_counter_bytes = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
+                    UPDATE users SET used_bytes = 0, last_counter_bytes = ?, quota_status = 'active', status = ?, last_quota_sync = ?
                     WHERE username = ?
-                """, (now_str, username))
+                """, (current_cnt, new_status, now_str, username))
         elif has_quota_status:
             cur = conn.execute("""
-                UPDATE users SET used_bytes = 0, quota_status = 'active', status = 'active', last_quota_sync = ?
+                UPDATE users SET used_bytes = 0, quota_status = 'active', status = ?, last_quota_sync = ?
                 WHERE username = ?
-            """, (now_str, username))
+            """, (new_status, now_str, username))
         else:
-            cur = conn.execute("UPDATE users SET used_bytes = 0, status = 'active' WHERE username = ?", (username,))
+            cur = conn.execute("UPDATE users SET used_bytes = 0, status = ? WHERE username = ?", (new_status, username))
         conn.commit()
         conn.close()
 
-        uid = get_user_uid(username)
-        if uid is not None and uid > 0:
+        # Strict security guard: only unblock network if user is genuinely active and not expired
+        if new_status == 'active' and not is_expired and uid is not None and uid > 0:
             unblock_user_network(uid)
-            # Reset iptables counter for VEXTUNNEL_QUOTA chain
-            if hasattr(os, 'geteuid') and os.geteuid() == 0:
-                subprocess.run(
-                    ["iptables", "-Z", "VEXTUNNEL_QUOTA"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
+        elif new_status != 'active' or is_expired:
+            logger.info(f"User '{username}' quota reset to 0 B, but network unblock skipped (status='{new_status}', expired={is_expired})")
 
         logger.info(f"Bandwidth quota successfully reset to 0 B for user '{username}'")
         return cur.rowcount > 0
