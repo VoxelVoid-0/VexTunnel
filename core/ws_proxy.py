@@ -396,12 +396,23 @@ class SSHWebSocketProxy:
         async with server:
             await server.serve_forever()
 
+def parse_port_arg(val: str) -> int:
+    """Parse port number with resilience against unexpanded shell variables."""
+    try:
+        return int(val)
+    except Exception:
+        import re
+        m = re.search(r'\d+', str(val))
+        if m:
+            return int(m.group(0))
+        raise argparse.ArgumentTypeError(f"Invalid port value: '{val}'")
+
 def main():
     parser = argparse.ArgumentParser(description="VexTunnel High-Performance Async SSH WebSocket Proxy")
     parser.add_argument("--listen-host", default="0.0.0.0", help="Host address to bind (default: 0.0.0.0)")
-    parser.add_argument("--listen-port", type=int, default=80, help="Port to listen for WebSocket (default: 80)")
+    parser.add_argument("--listen-port", type=parse_port_arg, default=80, help="Port to listen for WebSocket (default: 80)")
     parser.add_argument("--target-host", default="127.0.0.1", help="Backend SSH host (default: 127.0.0.1)")
-    parser.add_argument("--target-port", type=int, default=109, help="Backend SSH port (default: 109 - Dropbear)")
+    parser.add_argument("--target-port", type=parse_port_arg, default=109, help="Backend SSH port (default: 109 - Dropbear)")
     parser.add_argument("--response-code", type=int, default=101, choices=[101, 200], help="Handshake HTTP response code (101 or 200)")
     parser.add_argument("--ssl-cert", default=None, help="Path to SSL certificate file")
     parser.add_argument("--ssl-key", default=None, help="Path to SSL private key file")

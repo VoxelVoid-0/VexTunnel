@@ -5,11 +5,11 @@ After=network.target
 [Service]
 Type=simple
 User=root
+Environment="BADVPN_PORT=7300"
 EnvironmentFile=-/etc/vextunnel/ports.env
-ExecStart=/usr/bin/badvpn-udpgw --listen-addr 127.0.0.1:${BADVPN_PORT:-7300} --max-clients 500
+ExecStart=/usr/bin/badvpn-udpgw --listen-addr 127.0.0.1:$BADVPN_PORT --max-clients 500
 Restart=always
 RestartSec=3s
 
 [Install]
 WantedBy=multi-user.target
-
