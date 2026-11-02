@@ -6,6 +6,7 @@ and kernel-level quota management.
 """
 
 import unittest
+from unittest import mock
 import os
 import sqlite3
 import tempfile
