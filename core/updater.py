@@ -162,6 +162,33 @@ def sync_dependencies(repo_dir: str) -> Tuple[bool, str]:
     if not os.path.isfile(req_file) or os.path.getsize(req_file) == 0:
         return True, "No dependencies required."
 
+    has_active_reqs = False
+    try:
+        with open(req_file, "r") as f:
+            for line in f:
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    has_active_reqs = True
+                    break
+    except Exception:
+        pass
+
+    if not has_active_reqs:
+        return True, "No active dependencies listed."
+
+    # Check if pip is available
+    check_pip = subprocess.run([sys.executable, "-m", "pip", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if check_pip.returncode != 0:
+        if hasattr(os, "geteuid") and os.geteuid() == 0 and os.name != 'nt':
+            try:
+                subprocess.run(["apt-get", "update", "-y"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["apt-get", "install", "-y", "python3-pip"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        check_pip2 = subprocess.run([sys.executable, "-m", "pip", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check_pip2.returncode != 0:
+            return False, "python3-pip is not installed on system."
+
     base_cmd = [sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", "-r", req_file]
     is_system_python = (sys.prefix == sys.base_prefix)
 
