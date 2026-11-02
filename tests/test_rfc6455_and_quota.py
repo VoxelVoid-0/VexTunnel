@@ -236,13 +236,13 @@ class TestRFC6455AndQuota(unittest.TestCase):
         self.assertEqual(headers.get("sec-websocket-version"), "8")
 
     def test_sync_bandwidth_quotas_user_without_uid(self):
-        """Test sync_bandwidth_quotas gracefully handles users with no OS UID without UnboundLocalError."""
-        from core.quota_manager import sync_bandwidth_quotas
+        """Test sync_all_quotas gracefully handles users with no OS UID without UnboundLocalError."""
+        from core.quota_manager import sync_all_quotas
         mgr = UserManager(self.db_path)
         mgr.create_user("nouiduser", "Pass123!", days_valid=30, max_logins=2, quota_mb=100)
 
         with mock.patch("core.quota_manager.get_user_uid", return_value=None):
-            summary = sync_bandwidth_quotas(self.db_path)
+            summary = sync_all_quotas(self.db_path)
             self.assertIn("nouiduser", summary)
             self.assertEqual(summary["nouiduser"]["status"], "active")
 
