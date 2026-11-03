@@ -153,9 +153,12 @@ class TestRFC6455AndQuota(unittest.TestCase):
     def test_quota_formatting_and_parsing(self):
         """Test parse_bytes and format_bytes conversions."""
         self.assertEqual(parse_bytes("0"), 0)
+        self.assertEqual(parse_bytes("1"), 1024**3)
+        self.assertEqual(parse_bytes("10"), 10 * 1024**3)
         self.assertEqual(parse_bytes("500M"), 500 * 1024 * 1024)
         self.assertEqual(parse_bytes("50G"), 50 * 1024 * 1024 * 1024)
         self.assertEqual(parse_bytes("2TB"), 2 * 1024**4)
+        self.assertEqual(parse_bytes("100B"), 100)
 
         self.assertEqual(format_bytes(0), "0 B")
         self.assertEqual(format_bytes(1024), "1.00 KB")
@@ -280,6 +283,42 @@ class TestRFC6455AndQuota(unittest.TestCase):
                 summary = sync_all_quotas(self.db_path)
                 self.assertIn("nouiduser", summary)
                 self.assertEqual(summary["nouiduser"]["status"], "active")
+
+    def test_init_firewall_chains_positioning(self):
+        """Test init_firewall_chains ensures VEXTUNNEL_BLOCK and VEXTUNNEL_QUOTA are at top of OUTPUT."""
+        from core.quota_manager import init_firewall_chains
+        commands_run = []
+
+        def fake_run(cmd, *args, **kwargs):
+            commands_run.append(cmd)
+            # Simulate iptables -S OUTPUT with UFW rules before VEXTUNNEL_QUOTA
+            if cmd[:2] == ["iptables", "-S"]:
+                mock_res = mock.MagicMock()
+                mock_res.stdout = (
+                    "-P OUTPUT ACCEPT\n"
+                    "-A OUTPUT -j ufw-before-output\n"
+                    "-A OUTPUT -j ufw-track-output\n"
+                    "-A OUTPUT -j VEXTUNNEL_QUOTA\n"
+                )
+                mock_res.returncode = 0
+                return mock_res
+            res = mock.MagicMock()
+            res.returncode = 0
+            return res
+
+        with mock.patch("os.name", "posix"):
+            with mock.patch("os.geteuid", return_value=0, create=True):
+                with mock.patch("subprocess.run", side_effect=fake_run):
+                    res = init_firewall_chains()
+                    self.assertTrue(res)
+
+                    # Verify that mispositioned VEXTUNNEL_QUOTA was deleted and re-inserted at top
+                    deleted = any(c[:4] == ["iptables", "-D", "OUTPUT", "-j"] and c[4] == "VEXTUNNEL_QUOTA" for c in commands_run)
+                    inserted_quota = any(c[:3] == ["iptables", "-I", "OUTPUT"] and "VEXTUNNEL_QUOTA" in c for c in commands_run)
+                    inserted_block = any(c[:3] == ["iptables", "-I", "OUTPUT"] and "VEXTUNNEL_BLOCK" in c for c in commands_run)
+                    self.assertTrue(deleted, "Mispositioned VEXTUNNEL_QUOTA after UFW must be deleted")
+                    self.assertTrue(inserted_quota, "VEXTUNNEL_QUOTA must be inserted at top of OUTPUT")
+                    self.assertTrue(inserted_block, "VEXTUNNEL_BLOCK must be inserted at top of OUTPUT")
 
 if __name__ == "__main__":
     unittest.main()

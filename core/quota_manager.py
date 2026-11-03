@@ -44,8 +44,8 @@ def format_bytes(num_bytes: int) -> str:
         i += 1
     return f"{n:.2f} {units[i]}"
 
-def parse_bytes(text: str) -> int:
-    """Parse string representation (e.g. '50G', '50GB', '500M') into integer bytes."""
+def parse_bytes(text: str, default_unit: str = "GB") -> int:
+    """Parse string representation (e.g. '50G', '50GB', '500M', '1' -> 1GB) into integer bytes."""
     text = text.strip().upper()
     if not text or text == "0":
         return 0
@@ -54,14 +54,19 @@ def parse_bytes(text: str) -> int:
         raise ValueError(f"Invalid bandwidth quota format: '{text}' (use e.g. 50G, 500M, 10G)")
     val, unit = match.groups()
     val = float(val)
-    multiplier = {
-        "": 1, "B": 1,
+    multiplier_map = {
+        "B": 1,
         "K": 1024, "KB": 1024,
         "M": 1024**2, "MB": 1024**2,
         "G": 1024**3, "GB": 1024**3,
         "T": 1024**4, "TB": 1024**4,
         "P": 1024**5, "PB": 1024**5
-    }.get(unit, 1)
+    }
+    if not unit:
+        # Bare number without unit defaults to default_unit (e.g. '1' -> 1 GB)
+        multiplier = multiplier_map.get(default_unit.upper(), 1024**3)
+    else:
+        multiplier = multiplier_map.get(unit, 1)
     return int(val * multiplier)
 
 def get_user_uid(username: str) -> Optional[int]:
@@ -81,17 +86,34 @@ def init_firewall_chains() -> bool:
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
-        # 1. Dedicated Block Chain (Evaluated at the very top of OUTPUT)
+        # 1. Ensure dedicated chains exist
         subprocess.run(["iptables", "-N", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        check_block = subprocess.run(["iptables", "-C", "OUTPUT", "-j", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if check_block.returncode != 0:
-            subprocess.run(["iptables", "-I", "OUTPUT", "1", "-j", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        # 2. Dedicated Quota Accounting Chain
         subprocess.run(["iptables", "-N", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        check_quota = subprocess.run(["iptables", "-C", "OUTPUT", "-j", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if check_quota.returncode != 0:
-            subprocess.run(["iptables", "-A", "OUTPUT", "-j", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 2. Inspect current OUTPUT chain jumps
+        res = subprocess.run(["iptables", "-S", "OUTPUT"], capture_output=True, text=True, timeout=5)
+        lines = [line.strip() for line in res.stdout.splitlines() if line.startswith("-A OUTPUT")]
+
+        quota_idx = next((i for i, line in enumerate(lines) if "-j VEXTUNNEL_QUOTA" in line), -1)
+        block_idx = next((i for i, line in enumerate(lines) if "-j VEXTUNNEL_BLOCK" in line), -1)
+
+        # If VEXTUNNEL_QUOTA or VEXTUNNEL_BLOCK is placed behind terminating rules (like UFW at index > 1),
+        # remove it to re-insert at top priority.
+        if quota_idx > 1:
+            subprocess.run(["iptables", "-D", "OUTPUT", "-j", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            quota_idx = -1
+
+        if block_idx > 1:
+            subprocess.run(["iptables", "-D", "OUTPUT", "-j", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            block_idx = -1
+
+        # 3. Position at the top of OUTPUT (Block first, Quota accounting second)
+        if block_idx == -1:
+            subprocess.run(["iptables", "-I", "OUTPUT", "1", "-j", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if quota_idx == -1:
+            res_insert = subprocess.run(["iptables", "-I", "OUTPUT", "2", "-j", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res_insert.returncode != 0:
+                subprocess.run(["iptables", "-I", "OUTPUT", "1", "-j", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except Exception as e:
         logger.debug(f"Failed to initialize dedicated firewall chains: {e}")
