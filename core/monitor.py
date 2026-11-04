@@ -54,11 +54,29 @@ def get_online_users(db_path: str = None) -> list:
 
     # Parse process table for active Dropbear and OpenSSH VPN tunnels
     try:
-        ps_res = subprocess.run(["ps", "-eo", "user,pid,comm,args"], capture_output=True, text=True, timeout=3)
+        ps_res = subprocess.run(["ps", "-eo", "user:32,pid,comm,args"], capture_output=True, text=True, timeout=3)
         for line in ps_res.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 3:
                 user = parts[0]
+                try:
+                    pid = int(parts[1])
+                except ValueError:
+                    continue
+
+                # Defensive fallback: If ps truncated username with '+', resolve real username via /proc/<pid>/status
+                if user.endswith('+'):
+                    try:
+                        import pwd
+                        with open(f"/proc/{pid}/status") as sf:
+                            for sl in sf:
+                                if sl.startswith("Uid:"):
+                                    real_uid = int(sl.split()[1])
+                                    user = pwd.getpwuid(real_uid).pw_name
+                                    break
+                    except Exception:
+                        pass
+
                 # Filter out system daemons, administrative accounts, and grep processes
                 if user in SYSTEM_USERS or is_system_or_admin_user(user) or "grep" in line:
                     continue

@@ -185,6 +185,7 @@ class TestDeepHardening(unittest.TestCase):
             "alice     2002 dropbear        /usr/sbin/dropbear -EF\n"
             "bob       3001 sshd-session    sshd-session: bob@notty\n"
             "charlie   4001 sshd            sshd: charlie@pts/1\n"
+            "longuser01 5501 dropbear       /usr/sbin/dropbear -EF\n"
             "daemon    5001 sshd            sshd: daemon\n"
         )
         mock_run = MagicMock()
@@ -202,6 +203,8 @@ class TestDeepHardening(unittest.TestCase):
 
             self.assertIn("charlie", sessions)
             self.assertEqual(sessions["charlie"], [4001], "OpenSSH interactive sessions must be captured")
+
+            self.assertIn("longuser01", sessions, "Long usernames (>8 chars) must be fully captured")
 
             self.assertNotIn("root", sessions, "Root daemon processes must be ignored")
             self.assertNotIn("daemon", sessions, "System daemon users must be ignored")

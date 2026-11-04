@@ -70,16 +70,30 @@ def get_active_user_sessions() -> dict:
     user_pids = {}
 
     try:
-        res = subprocess.run(["ps", "-eo", "user,pid,comm,args"], capture_output=True, text=True, timeout=5)
+        res = subprocess.run(["ps", "-eo", "user:32,pid,comm,args"], capture_output=True, text=True, timeout=5)
         for line in res.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 3:
                 uname = parts[0]
-                if uname in SYSTEM_USERS or is_system_or_admin_user(uname) or "grep" in line:
-                    continue
                 try:
                     pid = int(parts[1])
                 except ValueError:
+                    continue
+
+                # Defensive fallback: If ps truncated username with '+', resolve real username via /proc/<pid>/status
+                if uname.endswith('+'):
+                    try:
+                        import pwd
+                        with open(f"/proc/{pid}/status") as sf:
+                            for sl in sf:
+                                if sl.startswith("Uid:"):
+                                    real_uid = int(sl.split()[1])
+                                    uname = pwd.getpwuid(real_uid).pw_name
+                                    break
+                    except Exception:
+                        pass
+
+                if uname in SYSTEM_USERS or is_system_or_admin_user(uname) or "grep" in line:
                     continue
 
                 comm = parts[2].lower()

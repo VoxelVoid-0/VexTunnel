@@ -260,7 +260,7 @@ def kill_user_sessions(username: str):
         subprocess.run(["pkill", "-u", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.1)
         # Authoritative SIGKILL loop for lingering Dropbear/OpenSSH/tunnel processes
-        res = subprocess.run(["ps", "-eo", "user,pid,comm"], capture_output=True, text=True, timeout=5)
+        res = subprocess.run(["ps", "-eo", "user:32,pid,comm"], capture_output=True, text=True, timeout=5)
         for line in res.stdout.splitlines():
             parts = line.split()
             if len(parts) >= 2 and parts[0] == username:
