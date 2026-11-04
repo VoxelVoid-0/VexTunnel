@@ -3,6 +3,8 @@
 [![VexTunnel CI](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/ci.yml)
 [![Security Analysis](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/security.yml/badge.svg)](https://github.com/VoxelVoid-0/VexTunnel/actions/workflows/security.yml)
 [![Release](https://img.shields.io/github/v/release/VoxelVoid-0/VexTunnel?color=blue&logo=github)](https://github.com/VoxelVoid-0/VexTunnel/releases/latest)
+[![Latest Release Downloads](https://img.shields.io/github/downloads/VoxelVoid-0/VexTunnel/latest/total?color=blue&label=latest%20downloads&logo=github)](https://github.com/VoxelVoid-0/VexTunnel/releases/latest)
+[![Total Downloads](https://img.shields.io/github/downloads/VoxelVoid-0/VexTunnel/total?color=brightgreen&label=total%20downloads&logo=github)](https://github.com/VoxelVoid-0/VexTunnel/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Architecture](https://img.shields.io/badge/Architecture-x86__64%20%7C%20ARM64-orange.svg)](#)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](#)
