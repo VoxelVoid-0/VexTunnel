@@ -563,7 +563,12 @@ def deep_socket_health_check(ports: Optional[List[int]] = None, timeout: float =
     if os.name == 'nt':
         return True, []
     if ports is None:
-        ports = [80, 109]
+        try:
+            from core.ports_manager import load_ports
+            cfg = load_ports()
+            ports = [cfg.get("WS_PORT", 80), cfg.get("DROPBEAR_PORT", 109)]
+        except Exception:
+            ports = [80, 109]
 
     failed_ports = []
     for port in ports:

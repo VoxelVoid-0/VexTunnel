@@ -24,6 +24,10 @@ from core.quota_manager import (
 from core.monitor import get_system_stats, get_all_services_status, get_online_users
 from core.watchdog import VexTunnelDoctor, ServiceWatchdog
 from core.telegram_notifier import get_telegram_config, save_telegram_config, send_telegram_message
+from core.ports_manager import (
+    load_ports, save_ports, set_port, toggle_wss, reset_default_ports,
+    check_port_in_use, DEFAULT_PORTS as PORTS_DEFAULTS
+)
 from core.updater import (
     capture_pre_update_state, backup_database, sync_dependencies,
     apply_migrations, restart_tunnel_services, verify_health,
@@ -132,14 +136,15 @@ class VexTunnelMenu:
 
     def generate_vextunnel_uri(self, username: str) -> str:
         """Generate structured machine-readable connection URI."""
+        ports = load_ports()
         config = {
             "v": "1.3.0",
             "host": self.host,
             "user": username,
-            "ws_http": 80,
-            "ws_https": 443,
-            "dropbear": 109,
-            "udpgw": 7300,
+            "ws_http": ports.get("WS_PORT", 80),
+            "ws_https": ports.get("WSS_PORT", 443) if ports.get("WSS_ENABLED", True) else None,
+            "dropbear": ports.get("DROPBEAR_PORT", 109),
+            "udpgw": ports.get("UDPGW_PORT", 7300),
             "payload": "GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]"
         }
         raw_json = json.dumps(config, separators=(',', ':'))
@@ -147,6 +152,13 @@ class VexTunnelMenu:
 
     def print_client_card(self, username: str, password_display: str, expires_at: str, days: int):
         """Display client connection card with payloads and deep link."""
+        ports = load_ports()
+        ws_p = f"{ports.get('WS_PORT', 80)}, {ports.get('WS_ALT_PORT', 8880)}"
+        wss_enabled = ports.get("WSS_ENABLED", True)
+        wss_p = f"{ports.get('WSS_PORT', 443)}" if wss_enabled else f"{YELLOW}DISABLED (Co-existence mode){RESET}"
+        drop_p = f"{ports.get('DROPBEAR_PORT', 109)}, {ports.get('DROPBEAR_ALT_PORT', 143)}"
+        udpgw_p = f"{ports.get('UDPGW_PORT', 7300)}"
+
         print(f"\n{BOLD}{GREEN}╔══════════════════════════════════════════════════════════════╗{RESET}")
         print(f"{BOLD}{GREEN}║                   CLIENT CONNECTION CARD                     ║{RESET}")
         print(f"{BOLD}{GREEN}╚══════════════════════════════════════════════════════════════╝{RESET}")
@@ -156,20 +168,21 @@ class VexTunnelMenu:
         print(f" {WHITE}Expires At       :{RESET} {expires_at} ({days} Days)")
         print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
         print(f"{BOLD}[ PORT SPECIFICATIONS ]{RESET}")
-        print(f" • {WHITE}WebSocket HTTP  :{RESET} {GREEN}80, 8880{RESET} (For Cloudflare Flexible / Direct)")
-        print(f" • {WHITE}WebSocket WSS   :{RESET} {GREEN}443{RESET} (TLS/SSL Encrypted - Best for SNI)")
-        print(f" • {WHITE}Dropbear SSH    :{RESET} {GREEN}109, 143{RESET}")
+        print(f" • {WHITE}WebSocket HTTP  :{RESET} {GREEN}{ws_p}{RESET} (For Cloudflare Flexible / Direct)")
+        print(f" • {WHITE}WebSocket WSS   :{RESET} {GREEN if wss_enabled else YELLOW}{wss_p}{RESET} (TLS/SSL Encrypted - Best for SNI)")
+        print(f" • {WHITE}Dropbear SSH    :{RESET} {GREEN}{drop_p}{RESET}")
         print(f" • {WHITE}OpenSSH         :{RESET} {GREEN}22, 2222{RESET}")
-        print(f" • {WHITE}BadVPN UDPGW    :{RESET} {GREEN}7300{RESET} (For WhatsApp Calls & Gaming)")
+        print(f" • {WHITE}BadVPN UDPGW    :{RESET} {GREEN}{udpgw_p}{RESET} (For WhatsApp Calls & Gaming)")
         print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
         print(f"{BOLD}[ READY-TO-COPY PAYLOAD TEMPLATES ]{RESET}")
         print(f"\n{YELLOW}1. HTTP Injector / NetMod / HTTP Custom (Standard WS):{RESET}")
         print(f"GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]")
         print(f"\n{YELLOW}2. Custom Dash (Zoom / CDN Free-Internet Bypass):{RESET}")
         print(f"GET- / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]")
-        print(f"\n{YELLOW}3. Direct SSL / TLS (WSS Port 443 with SNI Spoof):{RESET}")
-        print(f"SNI: {self.host} (or bug host, e.g. www.zoom.us)")
-        print(f"Payload: GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]")
+        if wss_enabled:
+            print(f"\n{YELLOW}3. Direct SSL / TLS (WSS Port {ports.get('WSS_PORT', 443)} with SNI Spoof):{RESET}")
+            print(f"SNI: {self.host} (or bug host, e.g. www.zoom.us)")
+            print(f"Payload: GET / HTTP/1.1[crlf]Host: [host][crlf]Upgrade: websocket[crlf][crlf]")
         print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
         print(f"{BOLD}[ PORTABLE CONFIG URI (Deep-Link) ]{RESET}")
         print(f"{CYAN}{self.generate_vextunnel_uri(username)}{RESET}")
@@ -774,6 +787,166 @@ class VexTunnelMenu:
             time.sleep(1)
             reexec_menu()
 
+    def ports_coexistence_manager(self):
+        """Manage individual service listening ports and 3x-ui / Xray co-existence."""
+        while True:
+            self.print_banner()
+            print(f"\n{BOLD}{GREEN}=== SERVICE PORTS & CO-EXISTENCE MANAGER ==={RESET}\n")
+            ports = load_ports()
+            wss_en = ports.get("WSS_ENABLED", True)
+            wss_p = ports.get("WSS_PORT", 443)
+            ws_p = ports.get("WS_PORT", 80)
+            ws_alt = ports.get("WS_ALT_PORT", 8880)
+            drop_p = ports.get("DROPBEAR_PORT", 109)
+            udpgw_p = ports.get("UDPGW_PORT", 7300)
+
+            occupied_443, proc_443 = check_port_in_use(443)
+
+            print(f"{BOLD}[ ACTIVE PORT BINDINGS ]{RESET}")
+            print(f" • WebSocket HTTP  (WS)    : {CYAN}{ws_p}{RESET}")
+            print(f" • WebSocket Alt   (WS)    : {CYAN}{ws_alt}{RESET}")
+            wss_status_str = f"{GREEN}ENABLED on port {wss_p}{RESET}" if wss_en else f"{YELLOW}DISABLED (Port yielded to 3x-ui / Xray){RESET}"
+            print(f" • WebSocket Secure (WSS)  : {wss_status_str}")
+            print(f" • Dropbear SSH            : {CYAN}{drop_p}{RESET} (Alt: {ports.get('DROPBEAR_ALT_PORT', 143)})")
+            print(f" • BadVPN UDPGW            : {CYAN}{udpgw_p}{RESET}")
+            print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+
+            if occupied_443:
+                is_vex = "python" in proc_443.lower() or "vextunnel" in proc_443.lower()
+                if not is_vex:
+                    print(f"{YELLOW}[NOTICE] Port 443 is currently active by external service: {WHITE}{proc_443}{RESET}")
+                    print(f"         {DIM}VexTunnel dynamic ports ensure full co-existence without conflict.{RESET}")
+                    print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+
+            print(f"  {CYAN}1){RESET} Toggle WSS 443 Service ({'DISABLE (Yield 443 to 3x-ui)' if wss_en else 'ENABLE WSS'})")
+            print(f"  {CYAN}2){RESET} Change WSS Port (Current: {wss_p})")
+            print(f"  {CYAN}3){RESET} Change WS HTTP Port (Current: {ws_p})")
+            print(f"  {CYAN}4){RESET} Change WS Alt Port (Current: {ws_alt})")
+            print(f"  {CYAN}5){RESET} Change Dropbear Port (Current: {drop_p})")
+            print(f"  {CYAN}6){RESET} Change BadVPN UDPGW Port (Current: {udpgw_p})")
+            print(f"  {CYAN}7){RESET} Reset All Ports to System Defaults")
+            print(f"")
+            print(f"  {RED}0){RESET} Return to Main Menu")
+            print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+
+            ch = safe_input(f"{WHITE}Select an option [0-7]: {RESET}")
+            if ch == "1":
+                new_state = not wss_en
+                action_str = "enable" if new_state else "disable"
+                confirm = safe_input(f"{YELLOW}Are you sure you want to {action_str} WSS service? (y/n): {RESET}").lower()
+                if confirm == 'y':
+                    ok, msg = toggle_wss(new_state)
+                    if ok:
+                        print(f"\n{GREEN}✅ {msg}{RESET}")
+                        if new_state:
+                            self._print_client_reminder_banner(wss_p, "WebSocket Proxy (WSS)")
+                    else:
+                        print(f"\n{RED}❌ Failed: {msg}{RESET}")
+                    wait_enter()
+
+            elif ch == "2":
+                raw = safe_input(f"{WHITE}Enter new WSS port (1-65535, e.g. 8443) [0 to cancel]: {RESET}")
+                if raw and raw != "0":
+                    try:
+                        p_val = int(raw)
+                        ok, msg = set_port("WSS_PORT", p_val)
+                        if ok:
+                            print(f"\n{GREEN}✅ {msg}{RESET}")
+                            self._print_client_reminder_banner(p_val, "WebSocket Proxy (WSS)")
+                        else:
+                            print(f"\n{RED}❌ Error: {msg}{RESET}")
+                    except ValueError:
+                        print(f"\n{RED}Invalid port number!{RESET}")
+                    wait_enter()
+
+            elif ch == "3":
+                raw = safe_input(f"{WHITE}Enter new HTTP WS port (1-65535, e.g. 80, 8080) [0 to cancel]: {RESET}")
+                if raw and raw != "0":
+                    try:
+                        p_val = int(raw)
+                        ok, msg = set_port("WS_PORT", p_val)
+                        if ok:
+                            print(f"\n{GREEN}✅ {msg}{RESET}")
+                            self._print_client_reminder_banner(p_val, "WebSocket Proxy (HTTP WS)")
+                        else:
+                            print(f"\n{RED}❌ Error: {msg}{RESET}")
+                    except ValueError:
+                        print(f"\n{RED}Invalid port number!{RESET}")
+                    wait_enter()
+
+            elif ch == "4":
+                raw = safe_input(f"{WHITE}Enter new WS Alt port (1-65535, e.g. 8880, 2082) [0 to cancel]: {RESET}")
+                if raw and raw != "0":
+                    try:
+                        p_val = int(raw)
+                        ok, msg = set_port("WS_ALT_PORT", p_val)
+                        if ok:
+                            print(f"\n{GREEN}✅ {msg}{RESET}")
+                            self._print_client_reminder_banner(p_val, "WebSocket Proxy (WS Alt)")
+                        else:
+                            print(f"\n{RED}❌ Error: {msg}{RESET}")
+                    except ValueError:
+                        print(f"\n{RED}Invalid port number!{RESET}")
+                    wait_enter()
+
+            elif ch == "5":
+                raw = safe_input(f"{WHITE}Enter new Dropbear SSH port (1-65535, e.g. 109) [0 to cancel]: {RESET}")
+                if raw and raw != "0":
+                    try:
+                        p_val = int(raw)
+                        ok, msg = set_port("DROPBEAR_PORT", p_val)
+                        if ok:
+                            print(f"\n{GREEN}✅ {msg}{RESET}")
+                            self._print_client_reminder_banner(p_val, "Dropbear SSH")
+                        else:
+                            print(f"\n{RED}❌ Error: {msg}{RESET}")
+                    except ValueError:
+                        print(f"\n{RED}Invalid port number!{RESET}")
+                    wait_enter()
+
+            elif ch == "6":
+                raw = safe_input(f"{WHITE}Enter new BadVPN UDPGW port (1-65535, e.g. 7300) [0 to cancel]: {RESET}")
+                if raw and raw != "0":
+                    try:
+                        p_val = int(raw)
+                        ok, msg = set_port("UDPGW_PORT", p_val)
+                        if ok:
+                            print(f"\n{GREEN}✅ {msg}{RESET}")
+                            self._print_client_reminder_banner(p_val, "BadVPN UDPGW")
+                        else:
+                            print(f"\n{RED}❌ Error: {msg}{RESET}")
+                    except ValueError:
+                        print(f"\n{RED}Invalid port number!{RESET}")
+                    wait_enter()
+
+            elif ch == "7":
+                confirm = safe_input(f"{YELLOW}Reset all service ports to system defaults? (y/n): {RESET}").lower()
+                if confirm == 'y':
+                    ok, msg = reset_default_ports()
+                    if ok:
+                        print(f"\n{GREEN}✅ {msg}{RESET}")
+                        print(f"{YELLOW}Notice: Ports reset to defaults (80, 8880, 443, 109, 143, 7300).{RESET}")
+                    else:
+                        print(f"\n{RED}❌ Error: {msg}{RESET}")
+                    wait_enter()
+
+            elif ch in ("0", "q", "exit"):
+                break
+
+    def _print_client_reminder_banner(self, new_port: int, service_name: str):
+        """Display prominent visual notice reminding admins to update VPN clients."""
+        print(f"\n{BOLD}{YELLOW}╔══════════════════════════════════════════════════════════════╗{RESET}")
+        print(f"{BOLD}{YELLOW}║            ⚠️  CLIENT CONFIGURATION UPDATE NOTICE  ⚠️         ║{RESET}")
+        print(f"{BOLD}{YELLOW}╚══════════════════════════════════════════════════════════════╝{RESET}")
+        print(f" {WHITE}Service Updated  :{RESET} {CYAN}{service_name}{RESET}")
+        print(f" {WHITE}Active Port      :{RESET} {GREEN}{new_port}{RESET}")
+        print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
+        print(f" {YELLOW}IMPORTANT:{RESET} All active VPN Client Apps using this tunnel service")
+        print(f" ({WHITE}HTTP Injector, NapsternetV, NetMod, v2rayNG, HTTP Custom{RESET})")
+        print(f" must have their Remote Port configuration updated to {GREEN}{new_port}{RESET}!")
+        print(f" Connections targeting the old port will no longer connect.")
+        print(f"{BOLD}{YELLOW}══════════════════════════════════════════════════════════════{RESET}\n")
+
     def run(self):
         while True:
             try:
@@ -796,11 +969,12 @@ class VexTunnelMenu:
                 print(f"  {CYAN}13){RESET} VPS Bandwidth Speedtest")
                 print(f"  {CYAN}14){RESET} Telegram Notifications & Backups")
                 print(f"  {CYAN}15){RESET} Check for Updates")
+                print(f"  {CYAN}16){RESET} Service Ports & Co-existence Manager")
                 print(f"")
                 print(f"  {RED}0){RESET} Exit")
                 print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
 
-                choice = safe_input(f"{WHITE}Select an option [0-15]: {RESET}")
+                choice = safe_input(f"{WHITE}Select an option [0-16]: {RESET}")
                 if choice == "1":
                     self.create_ssh_user()
                 elif choice == "2":
@@ -831,6 +1005,8 @@ class VexTunnelMenu:
                     self.telegram_alerts_and_backup_hub()
                 elif choice == "15":
                     self.check_and_apply_update()
+                elif choice == "16":
+                    self.ports_coexistence_manager()
                 elif choice in ("0", "q", "exit"):
                     clear_screen()
                     print(f"\n{GREEN}Exiting VexTunnel Menu. Goodbye!{RESET}\n")

@@ -20,6 +20,7 @@ if [ "$DIR" != "/etc/vextunnel" ]; then
     cp "$DIR/core/user_manager.py" /etc/vextunnel/core/
     cp "$DIR/core/session_enforcer.py" /etc/vextunnel/core/
     cp "$DIR/core/quota_manager.py" /etc/vextunnel/core/
+    cp "$DIR/core/ports_manager.py" /etc/vextunnel/core/ 2>/dev/null || true
     cp "$DIR/core/monitor.py" /etc/vextunnel/core/
     cp "$DIR/core/updater.py" /etc/vextunnel/core/ 2>/dev/null || true
     cp "$DIR/cli/menu.py" /etc/vextunnel/cli/
@@ -36,6 +37,7 @@ WSS_PORT=443
 WS_ALT_PORT=8880
 DROPBEAR_PORT=109
 BADVPN_PORT=7300
+WSS_ENABLED=true
 EOF
     fi
 fi
@@ -43,6 +45,7 @@ fi
 chmod +x /etc/vextunnel/core/ws_proxy.py
 chmod +x /etc/vextunnel/core/session_enforcer.py
 chmod +x /etc/vextunnel/core/quota_manager.py
+chmod +x /etc/vextunnel/core/ports_manager.py 2>/dev/null || true
 chmod +x /etc/vextunnel/cli/menu.py
 
 # Create global 'menu' command
@@ -139,7 +142,23 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer
-systemctl restart vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer
 
-echo "==> VexTunnel Services (WS 80, WSS 443, Session Enforcer) active!"
+# Check if WSS is enabled or disabled
+WSS_ACTIVE=true
+if [ -f /etc/vextunnel/ports.env ]; then
+    if grep -iq "^WSS_ENABLED=false" /etc/vextunnel/ports.env; then
+        WSS_ACTIVE=false
+    fi
+fi
+
+if [ "$WSS_ACTIVE" = "true" ]; then
+    systemctl enable vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer
+    systemctl restart vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer
+    echo "==> VexTunnel Services (WS 80, WSS 443, Session Enforcer) active!"
+else
+    systemctl stop vextunnel-wss 2>/dev/null || true
+    systemctl disable vextunnel-wss 2>/dev/null || true
+    systemctl enable vextunnel-ws vextunnel-ws-8880 vextunnel-enforcer
+    systemctl restart vextunnel-ws vextunnel-ws-8880 vextunnel-enforcer
+    echo "==> VexTunnel Services (WS 80, 8880, Session Enforcer) active (WSS Standby for 3x-ui)!"
+fi

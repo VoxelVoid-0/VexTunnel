@@ -43,6 +43,25 @@ CORE_SERVICES = [
 
 DEFAULT_PORTS = [80, 443, 109, 7300, 22]
 
+def get_monitored_ports() -> Tuple[List[int], bool, int]:
+    """Retrieve active service ports and WSS co-existence state dynamically."""
+    try:
+        from core.ports_manager import load_ports
+        cfg = load_ports()
+        wss_enabled = cfg.get("WSS_ENABLED", True)
+        wss_port = cfg.get("WSS_PORT", 443)
+        ports = [
+            cfg.get("WS_PORT", 80),
+            cfg.get("DROPBEAR_PORT", 109),
+            cfg.get("UDPGW_PORT", 7300),
+            cfg.get("OPENSSH_PORT", 22)
+        ]
+        if wss_enabled:
+            ports.append(wss_port)
+        return ports, wss_enabled, wss_port
+    except Exception:
+        return [80, 443, 109, 7300, 22], True, 443
+
 class VexTunnelDoctor:
     """System health inspection and automated diagnostic repair engine."""
 
@@ -159,15 +178,26 @@ class VexTunnelDoctor:
             sock.close()
 
     @staticmethod
-    def check_ports(ports: List[int] = DEFAULT_PORTS) -> Dict:
-        """Check all required tunnel listening ports."""
+    def check_ports(ports: Optional[List[int]] = None) -> Dict:
+        """Check all required tunnel listening ports respecting dynamic config and WSS co-existence."""
+        wss_enabled = True
+        wss_port = 443
+        if ports is None:
+            ports_to_check, wss_enabled, wss_port = get_monitored_ports()
+        else:
+            ports_to_check = list(ports)
+
         port_results = {}
         all_ok = True
-        for p in ports:
+        for p in ports_to_check:
             listening = VexTunnelDoctor.check_port_listener(p)
             port_results[p] = "listening" if listening else "closed"
             if not listening:
                 all_ok = False
+
+        if ports is None and not wss_enabled:
+            port_results[wss_port] = "disabled (co-existence)"
+
         return {
             "ok": all_ok,
             "ports": port_results,
@@ -276,6 +306,19 @@ class ServiceWatchdog:
     def check_and_heal_service(self, service_name: str) -> Dict:
         """Inspect service state and execute self-healing restart if failed."""
         now = time.time()
+
+        if service_name == "vextunnel-wss":
+            try:
+                from core.ports_manager import load_ports
+                if not load_ports().get("WSS_ENABLED", True):
+                    return {
+                        "service": service_name,
+                        "status": "disabled",
+                        "healed": False,
+                        "circuit_breaker": False
+                    }
+            except Exception:
+                pass
 
         if self.is_service_active(service_name):
             return {

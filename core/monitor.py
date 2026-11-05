@@ -162,11 +162,36 @@ def check_service_status(service_name: str) -> str:
         return "\033[91m✕ ERROR\033[0m"
 
 def get_all_services_status():
+    try:
+        from core.ports_manager import load_ports
+        ports = load_ports()
+    except Exception:
+        ports = {
+            "WS_PORT": 80,
+            "WS_ALT_PORT": 8880,
+            "WSS_PORT": 443,
+            "DROPBEAR_PORT": 109,
+            "DROPBEAR_ALT_PORT": 143,
+            "UDPGW_PORT": 7300,
+            "WSS_ENABLED": True
+        }
+
+    ws_port = ports.get("WS_PORT", 80)
+    ws_alt = ports.get("WS_ALT_PORT", 8880)
+    wss_port = ports.get("WSS_PORT", 443)
+    wss_enabled = ports.get("WSS_ENABLED", True)
+    drop_port = ports.get("DROPBEAR_PORT", 109)
+    drop_alt = ports.get("DROPBEAR_ALT_PORT", 143)
+    udpgw_port = ports.get("UDPGW_PORT", 7300)
+
     ws_80_status = check_service_status("vextunnel-ws")
     if "RUNNING" not in ws_80_status:
         ws_80_status = check_service_status("securetunnel-ws")
 
-    ws_443_status = check_service_status("vextunnel-wss")
+    if not wss_enabled:
+        ws_443_status = "\033[93m○ DISABLED (Co-existence 🟡)\033[0m"
+    else:
+        ws_443_status = check_service_status("vextunnel-wss")
 
     ws_8880_status = check_service_status("vextunnel-ws-8880")
     if "RUNNING" not in ws_8880_status:
@@ -174,14 +199,14 @@ def get_all_services_status():
 
     services = {
         "OpenSSH Server (22/2222)": check_service_status("ssh"),
-        "Dropbear SSH (109/143)": check_service_status("dropbear"),
-        "WebSocket Proxy (Port 80 HTTP)": ws_80_status,
-        "WebSocket Proxy (Port 443 WSS)": ws_443_status,
-        "WebSocket Proxy (Port 8880)": ws_8880_status,
+        f"Dropbear SSH ({drop_port}/{drop_alt})": check_service_status("dropbear"),
+        f"WebSocket Proxy (Port {ws_port} HTTP)": ws_80_status,
+        f"WebSocket Proxy (Port {wss_port} WSS)": ws_443_status,
+        f"WebSocket Proxy (Port {ws_alt})": ws_8880_status,
         "Session Concurrency Enforcer": check_service_status("vextunnel-enforcer"),
         "BadVPN UDPGW (Port 7100)": check_service_status("badvpn-7100"),
         "BadVPN UDPGW (Port 7200)": check_service_status("badvpn-7200"),
-        "BadVPN UDPGW (Port 7300)": check_service_status("badvpn-7300")
+        f"BadVPN UDPGW (Port {udpgw_port})": check_service_status(f"badvpn-{udpgw_port}")
     }
     return services
 
