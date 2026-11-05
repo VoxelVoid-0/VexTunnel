@@ -72,10 +72,15 @@ if [ "$TARGET_VERSION" = "--dev" ] || [ "$IS_DEV" = "true" ]; then
         git fetch origin main
         git reset --hard origin/main
     else
-        [ -f "$INSTALL_DIR/vextunnel.db" ] && cp "$INSTALL_DIR/vextunnel.db" /tmp/vextunnel.db.bak 2>/dev/null || true
+        if [ -f "$INSTALL_DIR/vextunnel.db" ]; then
+            cp "$INSTALL_DIR/vextunnel.db" /tmp/vextunnel.db.bak 2>/dev/null || true
+        fi
         rm -rf "$INSTALL_DIR"
         git clone "https://github.com/${REPO_OWNER}/${REPO_NAME}.git" "$INSTALL_DIR"
-        [ -f /tmp/vextunnel.db.bak ] && cp -n /tmp/vextunnel.db.bak "$INSTALL_DIR/vextunnel.db" 2>/dev/null && rm -f /tmp/vextunnel.db.bak || true
+        if [ -f /tmp/vextunnel.db.bak ]; then
+            cp -n /tmp/vextunnel.db.bak "$INSTALL_DIR/vextunnel.db" 2>/dev/null || true
+            rm -f /tmp/vextunnel.db.bak || true
+        fi
     fi
 else
     if [ -z "$TARGET_VERSION" ]; then

@@ -184,7 +184,7 @@ ufw allow 109/tcp >/dev/null 2>&1 || true
 ufw allow 143/tcp >/dev/null 2>&1 || true
 ufw allow 80/tcp >/dev/null 2>&1 || true
 if [ "$WSS_IS_ENABLED" = "true" ]; then
-    ufw allow ${WSS_CFG_PORT}/tcp >/dev/null 2>&1 || true
+    ufw allow "${WSS_CFG_PORT}/tcp" >/dev/null 2>&1 || true
 fi
 ufw allow 8880/tcp >/dev/null 2>&1 || true
 ufw allow 7100:7300/udp >/dev/null 2>&1 || true

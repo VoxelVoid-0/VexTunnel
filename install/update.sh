@@ -33,7 +33,9 @@ main() {
 
     # Phase 0: Pre-flight Safety Gates
     CURRENT_VERSION="v1.3.0"
-    [ -f "$INSTALL_DIR/VERSION" ] && CURRENT_VERSION=$(cat "$INSTALL_DIR/VERSION" | tr -d '[:space:]')
+    if [ -f "$INSTALL_DIR/VERSION" ]; then
+        CURRENT_VERSION=$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION")
+    fi
     echo -e " ${BOLD}Currently Installed:${NC} ${CYAN}${CURRENT_VERSION}${NC}"
 
     # 1. Fail-closed Disk Space Check (>= 150 MB free)
