@@ -158,7 +158,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadOnlyPaths=/etc/vextunnel
+ReadWritePaths=/etc/vextunnel
 
 [Install]
 WantedBy=multi-user.target

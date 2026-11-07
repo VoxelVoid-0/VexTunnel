@@ -255,5 +255,13 @@ class TestSubServerAndTokens(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cf_tunnel.set_portal_port(80) # Below 1024
 
+    def test_11_head_request(self):
+        """Verify HEAD request returns 200 OK without body."""
+        url = f"http://127.0.0.1:{self.server_port}/health"
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.read(), b"")
+
 if __name__ == "__main__":
     unittest.main()

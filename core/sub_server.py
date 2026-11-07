@@ -163,7 +163,10 @@ class VexSubRequestHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-    def do_GET(self):
+    def do_HEAD(self):
+        self.do_GET(head_only=True)
+
+    def do_GET(self, head_only: bool = False):
         client_ip = self.get_client_ip()
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
@@ -174,8 +177,9 @@ class VexSubRequestHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_security_headers("application/json")
             self.end_headers()
-            payload = json.dumps({"status": "ok", "service": "vextunnel-sub", "timestamp": int(time.time())})
-            self.wfile.write(payload.encode("utf-8"))
+            if not head_only:
+                payload = json.dumps({"status": "ok", "service": "vextunnel-sub", "timestamp": int(time.time())})
+                self.wfile.write(payload.encode("utf-8"))
             return
 
         # 2. Rate Limiting Check
@@ -185,7 +189,8 @@ class VexSubRequestHandler(BaseHTTPRequestHandler):
             self.send_security_headers("text/html; charset=utf-8")
             self.send_header("Retry-After", str(retry_after))
             self.end_headers()
-            self.wfile.write(self.render_rate_limit_page(retry_after).encode("utf-8"))
+            if not head_only:
+                self.wfile.write(self.render_rate_limit_page(retry_after).encode("utf-8"))
             return
 
         # 3. Match /sub/<token> endpoint
@@ -195,13 +200,13 @@ class VexSubRequestHandler(BaseHTTPRequestHandler):
 
             # Pre-DB Regex Gate (DoS Immunity)
             if not TOKEN_REGEX.fullmatch(raw_token):
-                self.send_404()
+                self.send_404(head_only=head_only)
                 return
 
             # Read-only DB Query
             user_data = self.query_user_readonly(raw_token)
             if not user_data:
-                self.send_404()
+                self.send_404(head_only=head_only)
                 return
 
             # Check if JSON format requested
@@ -211,25 +216,28 @@ class VexSubRequestHandler(BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_security_headers("application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps(user_data, indent=2).encode("utf-8"))
+                if not head_only:
+                    self.wfile.write(json.dumps(user_data, indent=2).encode("utf-8"))
                 return
 
             # Render 3x-ui Styled HTML
             self.send_response(200)
             self.send_security_headers("text/html; charset=utf-8")
             self.end_headers()
-            html = self.render_3xui_sub_page(user_data, raw_token)
-            self.wfile.write(html.encode("utf-8"))
+            if not head_only:
+                html = self.render_3xui_sub_page(user_data, raw_token)
+                self.wfile.write(html.encode("utf-8"))
             return
 
         # Any unknown path
-        self.send_404()
+        self.send_404(head_only=head_only)
 
-    def send_404(self):
+    def send_404(self, head_only: bool = False):
         self.send_response(404)
         self.send_security_headers("text/html; charset=utf-8")
         self.end_headers()
-        self.wfile.write(self.render_404_page().encode("utf-8"))
+        if not head_only:
+            self.wfile.write(self.render_404_page().encode("utf-8"))
 
     def log_message(self, format, *args):
         # Keep logs silent in production to prevent disk spam
@@ -744,3 +752,4 @@ if __name__ == "__main__":
             pass
 
     run_server(DEFAULT_BIND_HOST, port, DEFAULT_DB_PATH)
+
