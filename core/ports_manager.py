@@ -265,6 +265,46 @@ def restart_service_safely(service_name: str) -> bool:
         return False
 
 
+def sync_dropbear_config(main_port: int = 109, alt_port: int = 143) -> bool:
+    """
+    Synchronize Dropbear native systemd drop-in override and SysV /etc/default/dropbear.
+    Guarantees Dropbear never binds to port 22 and auto-generates host keys (-R).
+    """
+    if os.name == 'nt':
+        return True
+    try:
+        # Tier 1: Modern Systemd Drop-in Override
+        override_dir = "/etc/systemd/system/dropbear.service.d"
+        os.makedirs(override_dir, exist_ok=True)
+        override_file = os.path.join(override_dir, "override.conf")
+        with open(override_file, "w", encoding="utf-8") as f:
+            f.write("[Unit]\n")
+            f.write("Description=Lightweight SSH server (VexTunnel Hardened)\n")
+            f.write("After=network.target\n\n")
+            f.write("[Service]\n")
+            f.write("EnvironmentFile=-/etc/default/dropbear\n")
+            f.write("ExecStart=\n")
+            f.write(f"ExecStart=/usr/sbin/dropbear -EF -R -p {alt_port} -p {main_port} -W 65536\n")
+            f.write("Restart=always\n")
+            f.write("RestartSec=3\n")
+
+        # Tier 2: SysV /etc/default/dropbear fallback
+        os.makedirs("/etc/default", exist_ok=True)
+        with open("/etc/default/dropbear", "w", encoding="utf-8") as f:
+            f.write("NO_START=0\n")
+            f.write(f"DROPBEAR_PORT={alt_port}\n")
+            f.write(f'DROPBEAR_EXTRA_ARGS="-R -p {main_port}"\n')
+            f.write('DROPBEAR_BANNER=""\n')
+            f.write("DROPBEAR_RECEIVE_WINDOW=65536\n")
+
+        subprocess.run(["systemctl", "daemon-reload"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["systemctl", "reset-failed", "dropbear"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception as e:
+        logger.warning(f"Error syncing dropbear config: {e}")
+        return False
+
+
 def set_port(service_key: str, new_port: int, ports_file: str = DEFAULT_PORTS_FILE, **kwargs) -> Tuple[bool, str]:
     """
     Validate, configure, and rebind a VexTunnel service port.
@@ -310,6 +350,10 @@ def set_port(service_key: str, new_port: int, ports_file: str = DEFAULT_PORTS_FI
     # Update Firewall
     proto = "udp" if service_key == "BADVPN_PORT" else "tcp"
     update_firewall_rules(old_port=old_port, new_port=new_port, proto=proto)
+
+    # If modifying Dropbear ports, synchronize native systemd drop-in override
+    if service_key in ("DROPBEAR_PORT", "DROPBEAR_ALT_PORT"):
+        sync_dropbear_config(current_ports.get("DROPBEAR_PORT", 109), current_ports.get("DROPBEAR_ALT_PORT", 143))
 
     # Restart matching service
     service_name = SERVICE_MAP.get(service_key)
@@ -379,6 +423,8 @@ def reset_default_ports(ports_file: str = DEFAULT_PORTS_FILE, **kwargs) -> Tuple
     defaults = dict(DEFAULT_CONFIG)
     if not save_ports(defaults, ports_file):
         return False, "Failed to reset ports.env."
+
+    sync_dropbear_config(109, 143)
 
     for s_name in SERVICE_MAP.values():
         restart_service_safely(s_name)

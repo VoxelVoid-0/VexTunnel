@@ -23,7 +23,9 @@ systemctl disable vextunnel-ws vextunnel-wss vextunnel-enforcer vextunnel-expiry
 
 echo -e "${YELLOW}==> Removing systemd service units...${NC}"
 rm -f /etc/systemd/system/vextunnel* /etc/systemd/system/badvpn*
+rm -rf /etc/systemd/system/dropbear.service.d
 systemctl daemon-reload
+systemctl reset-failed dropbear 2>/dev/null || true
 
 echo -e "${YELLOW}==> Removing dedicated VexTunnel firewall chains...${NC}"
 iptables -D OUTPUT -j VEXTUNNEL_BLOCK 2>/dev/null || true

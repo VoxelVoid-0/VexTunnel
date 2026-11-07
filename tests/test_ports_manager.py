@@ -22,7 +22,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.ports_manager import (
     load_ports, save_ports, check_port_in_use, update_firewall_rules,
-    set_port, toggle_wss, reset_default_ports, DEFAULT_PORTS
+    set_port, toggle_wss, reset_default_ports, sync_dropbear_config, DEFAULT_PORTS
 )
 from core.watchdog import VexTunnelDoctor, ServiceWatchdog
 
@@ -207,6 +207,29 @@ class TestPortsManager(unittest.TestCase):
             self.assertEqual(heal_res["status"], "disabled")
             self.assertFalse(heal_res["healed"])
             self.assertFalse(heal_res["circuit_breaker"])
+
+    @patch("subprocess.run")
+    def test_10_sync_dropbear_config(self, mock_subproc):
+        """Verify sync_dropbear_config writes systemd override with empty ExecStart= and SysV fallback."""
+        mock_subproc.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        test_override_dir = os.path.join(self.tmp_dir, "dropbear.service.d")
+        test_override_file = os.path.join(test_override_dir, "override.conf")
+        test_sysv_file = os.path.join(self.tmp_dir, "dropbear_default")
+
+        # Mock the file paths and os.name to test Linux logic
+        with patch("os.name", "posix"):
+            with patch("core.ports_manager.os.makedirs"):
+                with patch("builtins.open", unittest.mock.mock_open()) as mock_file:
+                    ok = sync_dropbear_config(main_port=109, alt_port=143)
+                    self.assertTrue(ok)
+
+                    # Verify ExecStart= (clearing line) and Dropbear ports were written
+                    written_content = "".join(call.args[0] for call in mock_file().write.call_args_list)
+                    self.assertIn("ExecStart=\n", written_content)
+                    self.assertIn("-p 143 -p 109", written_content)
+                    self.assertIn("-R", written_content)
+                    self.assertNotIn("-p 22", written_content)
 
 if __name__ == "__main__":
     unittest.main()
