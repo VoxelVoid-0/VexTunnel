@@ -309,6 +309,14 @@ class UserManager:
         """Delete user from Linux system and SQLite database."""
         username = username.strip().lower()
         if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
+            try:
+                from core.quota_manager import get_user_uid, remove_accounting_rule, unblock_user_network
+                uid = get_user_uid(username)
+                if uid:
+                    remove_accounting_rule(uid)
+                    unblock_user_network(uid)
+            except Exception:
+                pass
             subprocess.run(["userdel", "-f", username], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
         with self._get_connection() as conn:

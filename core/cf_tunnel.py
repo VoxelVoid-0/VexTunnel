@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VexTunnel - Cloudflare Zero Trust Tunnel Manager (Hardened v1.3.11)
+VexTunnel - Cloudflare Zero Trust Tunnel Manager (Hardened v1.3.13)
 Author: VoxelVoid-0
 License: GPL-3.0
 

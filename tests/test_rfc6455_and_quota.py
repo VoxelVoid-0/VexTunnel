@@ -320,5 +320,83 @@ class TestRFC6455AndQuota(unittest.TestCase):
                     self.assertTrue(inserted_quota, "VEXTUNNEL_QUOTA must be inserted at top of OUTPUT")
                     self.assertTrue(inserted_block, "VEXTUNNEL_BLOCK must be inserted at top of OUTPUT")
 
+    def test_bidirectional_connmark_chains_initialization(self):
+        """Test init_firewall_chains properly initializes mangle and input chains for bidirectional tracking."""
+        from core.quota_manager import init_firewall_chains
+        commands_run = []
+
+        def fake_run(cmd, *args, **kwargs):
+            commands_run.append(cmd)
+            mock_res = mock.MagicMock()
+            if cmd[:2] == ["iptables", "-S"]:
+                mock_res.stdout = "-P OUTPUT ACCEPT\n"
+            else:
+                mock_res.stdout = ""
+            mock_res.returncode = 1 if "-C" in cmd else 0
+            return mock_res
+
+        with mock.patch("os.name", "posix"):
+            with mock.patch("os.geteuid", return_value=0, create=True):
+                with mock.patch("subprocess.run", side_effect=fake_run):
+                    res = init_firewall_chains()
+                    self.assertTrue(res)
+
+                    has_mangle_chain = any(c[:4] == ["iptables", "-t", "mangle", "-N"] and c[4] == "VEXTUNNEL_MANGLE_OUT" for c in commands_run)
+                    has_prerouting_restore = any("PREROUTING" in c and "CONNMARK" in c and "--restore-mark" in c for c in commands_run)
+                    has_input_quota = any("INPUT" in c and "VEXTUNNEL_QUOTA" in c for c in commands_run)
+
+                    self.assertTrue(has_mangle_chain, "VEXTUNNEL_MANGLE_OUT chain must be created in mangle table")
+                    self.assertTrue(has_prerouting_restore, "CONNMARK restore-mark must be installed in PREROUTING")
+                    self.assertTrue(has_input_quota, "VEXTUNNEL_QUOTA must be jumped to from INPUT for ingress download accounting")
+
+    def test_setup_accounting_rule_bidirectional(self):
+        """Test setup_accounting_rule provisions MARK and CONNMARK rules in mangle and mark counter in filter."""
+        from core.quota_manager import setup_accounting_rule
+        commands_run = []
+
+        def fake_run(cmd, *args, **kwargs):
+            commands_run.append(cmd)
+            mock_res = mock.MagicMock()
+            mock_res.stdout = ""
+            mock_res.returncode = 1 if "-C" in cmd else 0
+            return mock_res
+
+        with mock.patch("os.name", "posix"):
+            with mock.patch("os.geteuid", return_value=0, create=True):
+                with mock.patch("subprocess.run", side_effect=fake_run):
+                    res = setup_accounting_rule(1003)
+                    self.assertTrue(res)
+
+                    has_mark = any("-t" in c and "mangle" in c and "MARK" in c and "--set-mark" in c and "1003" in c for c in commands_run)
+                    has_save_mark = any("-t" in c and "mangle" in c and "CONNMARK" in c and "--save-mark" in c for c in commands_run)
+                    has_quota_mark = any("VEXTUNNEL_QUOTA" in c and "-m" in c and "mark" in c and "1003" in c for c in commands_run)
+
+                    self.assertTrue(has_mark, "Outbound packets must be marked with UID in mangle")
+                    self.assertTrue(has_save_mark, "Mark must be saved to connection in mangle")
+                    self.assertTrue(has_quota_mark, "Passive mark counter must be installed in VEXTUNNEL_QUOTA")
+
+    def test_read_uid_bytes_mark_parsing(self):
+        """Test read_uid_bytes correctly parses both hex and decimal iptables mark match lines."""
+        from core.quota_manager import read_uid_bytes
+
+        fake_output = (
+            "Chain VEXTUNNEL_QUOTA (2 references)\n"
+            " pkts bytes target prot opt in out source destination\n"
+            "  100  1048576            all  --  *      *       0.0.0.0/0            0.0.0.0/0            mark match 0x3eb\n"
+            "   50   524288            all  --  *      *       0.0.0.0/0            0.0.0.0/0            owner UID match 1002\n"
+        )
+
+        with mock.patch("os.name", "posix"):
+            with mock.patch("subprocess.run") as mock_run:
+                mock_run.return_value = mock.MagicMock(stdout=fake_output, returncode=0)
+                bytes_1003 = read_uid_bytes(1003)
+                self.assertEqual(bytes_1003, 1048576)
+
+                bytes_1002 = read_uid_bytes(1002)
+                self.assertEqual(bytes_1002, 524288)
+
+                bytes_nonexistent = read_uid_bytes(9999)
+                self.assertEqual(bytes_nonexistent, 0)
+
 if __name__ == "__main__":
     unittest.main()

@@ -30,13 +30,20 @@ systemctl reset-failed dropbear 2>/dev/null || true
 echo -e "${YELLOW}==> Removing dedicated VexTunnel firewall chains...${NC}"
 iptables -D OUTPUT -j VEXTUNNEL_BLOCK 2>/dev/null || true
 iptables -D OUTPUT -j VEXTUNNEL_QUOTA 2>/dev/null || true
+iptables -D OUTPUT ! -o lo -j VEXTUNNEL_QUOTA 2>/dev/null || true
+iptables -D INPUT -j VEXTUNNEL_QUOTA 2>/dev/null || true
+iptables -D INPUT ! -i lo -j VEXTUNNEL_QUOTA 2>/dev/null || true
 iptables -D INPUT -j VEXTUNNEL_LIMIT 2>/dev/null || true
+iptables -t mangle -D PREROUTING ! -i lo -j CONNMARK --restore-mark 2>/dev/null || true
+iptables -t mangle -D OUTPUT -j VEXTUNNEL_MANGLE_OUT 2>/dev/null || true
 iptables -F VEXTUNNEL_BLOCK 2>/dev/null || true
 iptables -X VEXTUNNEL_BLOCK 2>/dev/null || true
 iptables -F VEXTUNNEL_QUOTA 2>/dev/null || true
 iptables -X VEXTUNNEL_QUOTA 2>/dev/null || true
 iptables -F VEXTUNNEL_LIMIT 2>/dev/null || true
 iptables -X VEXTUNNEL_LIMIT 2>/dev/null || true
+iptables -t mangle -F VEXTUNNEL_MANGLE_OUT 2>/dev/null || true
+iptables -t mangle -X VEXTUNNEL_MANGLE_OUT 2>/dev/null || true
 
 echo -e "${YELLOW}==> Removing cron automation...${NC}"
 rm -f /etc/cron.d/vextunnel-cleanup

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VexTunnel - Client Subscription Web Portal (Hardened v1.3.11)
+VexTunnel - Client Subscription Web Portal (Hardened v1.3.13)
 Author: VoxelVoid-0
 License: GPL-3.0
 
@@ -80,7 +80,7 @@ class ThreadSafeRateLimiter:
 GLOBAL_RATE_LIMITER = ThreadSafeRateLimiter()
 
 class VexSubRequestHandler(BaseHTTPRequestHandler):
-    server_version = "VexTunnel-Portal/1.3.11"
+    server_version = "VexTunnel-Portal/1.3.13"
     sys_version = ""
 
     def get_client_ip(self) -> str:
@@ -120,7 +120,19 @@ class VexSubRequestHandler(BaseHTTPRequestHandler):
                 return None
 
             now = datetime.datetime.now()
-            exp = datetime.datetime.strptime(row["expires_at"], "%Y-%m-%d %H:%M:%S")
+            exp_str = str(row["expires_at"]).strip()
+            exp = None
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    exp = datetime.datetime.strptime(exp_str, fmt)
+                    break
+                except ValueError:
+                    pass
+            if exp is None:
+                try:
+                    exp = datetime.datetime.fromisoformat(exp_str)
+                except Exception:
+                    exp = now + datetime.timedelta(days=30)
             diff = exp - now
             remaining_days = max(0, diff.days)
             is_expired = diff.total_seconds() <= 0
@@ -154,7 +166,8 @@ class VexSubRequestHandler(BaseHTTPRequestHandler):
                 "remaining_days": remaining_days,
                 "max_logins": row["max_logins"] if "max_logins" in row.keys() else 2
             }
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error querying user by sub_token: {e}")
             return None
         finally:
             if conn:

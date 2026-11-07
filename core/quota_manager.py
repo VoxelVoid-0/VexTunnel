@@ -86,11 +86,52 @@ def init_firewall_chains() -> bool:
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
-        # 1. Ensure dedicated chains exist
+        # 1. Ensure dedicated chains exist in filter and mangle tables
         subprocess.run(["iptables", "-N", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["iptables", "-N", "VEXTUNNEL_QUOTA"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["iptables", "-t", "mangle", "-N", "VEXTUNNEL_MANGLE_OUT"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        # 2. Inspect current OUTPUT chain jumps
+        # 2. In mangle PREROUTING: restore connmark on inbound packets so download traffic inherits the user's mark
+        check_preroute = subprocess.run(
+            ["iptables", "-t", "mangle", "-C", "PREROUTING", "!", "-i", "lo", "-j", "CONNMARK", "--restore-mark"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if check_preroute.returncode != 0:
+            subprocess.run(
+                ["iptables", "-t", "mangle", "-I", "PREROUTING", "1", "!", "-i", "lo", "-j", "CONNMARK", "--restore-mark"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+
+        # 3. In mangle OUTPUT: jump to VEXTUNNEL_MANGLE_OUT for outbound conntrack marking
+        check_mangle_out = subprocess.run(
+            ["iptables", "-t", "mangle", "-C", "OUTPUT", "-j", "VEXTUNNEL_MANGLE_OUT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if check_mangle_out.returncode != 0:
+            subprocess.run(
+                ["iptables", "-t", "mangle", "-I", "OUTPUT", "1", "-j", "VEXTUNNEL_MANGLE_OUT"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+
+        # 4. Clean any legacy owner rules from VEXTUNNEL_QUOTA so nf_tables permits jumping from INPUT
+        res_rules = subprocess.run(["iptables", "-S", "VEXTUNNEL_QUOTA"], capture_output=True, text=True, timeout=5)
+        for r_line in res_rules.stdout.splitlines():
+            if "--uid-owner" in r_line:
+                d_cmd = r_line.replace("-A", "-D").split()
+                subprocess.run(["iptables"] + d_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 5. In filter INPUT: jump to VEXTUNNEL_QUOTA for inbound (download) traffic accounting
+        check_in_quota = subprocess.run(
+            ["iptables", "-C", "INPUT", "!", "-i", "lo", "-j", "VEXTUNNEL_QUOTA"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if check_in_quota.returncode != 0:
+            subprocess.run(
+                ["iptables", "-I", "INPUT", "1", "!", "-i", "lo", "-j", "VEXTUNNEL_QUOTA"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+
+        # 6. Inspect current OUTPUT chain jumps
         res = subprocess.run(["iptables", "-S", "OUTPUT"], capture_output=True, text=True, timeout=5)
         lines = [line.strip() for line in res.stdout.splitlines() if line.startswith("-A OUTPUT")]
 
@@ -107,7 +148,7 @@ def init_firewall_chains() -> bool:
             subprocess.run(["iptables", "-D", "OUTPUT", "-j", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             block_idx = -1
 
-        # 3. Position at the top of OUTPUT (Block first, Quota accounting second)
+        # 6. Position at the top of OUTPUT (Block first, Quota accounting second)
         if block_idx == -1:
             subprocess.run(["iptables", "-I", "OUTPUT", "1", "-j", "VEXTUNNEL_BLOCK"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if quota_idx == -1:
@@ -159,33 +200,92 @@ def setup_anti_abuse_firewall(ports: list = None, rate_per_min: int = 60, burst:
         return False
 
 def setup_accounting_rule(uid: int) -> bool:
-    """Ensure iptables VEXTUNNEL_QUOTA passive counter rule exists for this UID without terminal verdicts."""
+    """
+    Ensure bidirectional iptables CONNMARK + VEXTUNNEL_QUOTA accounting rules exist for this UID.
+    Counts 100% of upload (egress) and download (ingress) bytes.
+    """
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
         init_firewall_chains()
-        # Clean up legacy -j ACCEPT rule if present to avoid short-circuiting downstream OUTPUT policies
-        subprocess.run(
-            ["iptables", "-D", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid), "-j", "ACCEPT"],
+        uid_str = str(uid)
+
+        # 1. Setup conntrack marking in mangle table VEXTUNNEL_MANGLE_OUT
+        check_mark = subprocess.run(
+            ["iptables", "-t", "mangle", "-C", "VEXTUNNEL_MANGLE_OUT", "!", "-o", "lo", "-m", "owner", "--uid-owner", uid_str, "-j", "MARK", "--set-mark", uid_str],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        check = subprocess.run(
-            ["iptables", "-C", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        if check.returncode != 0:
+        if check_mark.returncode != 0:
             subprocess.run(
-                ["iptables", "-A", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", str(uid)],
+                ["iptables", "-t", "mangle", "-A", "VEXTUNNEL_MANGLE_OUT", "!", "-o", "lo", "-m", "owner", "--uid-owner", uid_str, "-j", "MARK", "--set-mark", uid_str],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
-            logger.info(f"Initialized iptables passive accounting rule for UID {uid} in VEXTUNNEL_QUOTA")
+
+        check_connmark = subprocess.run(
+            ["iptables", "-t", "mangle", "-C", "VEXTUNNEL_MANGLE_OUT", "!", "-o", "lo", "-m", "owner", "--uid-owner", uid_str, "-j", "CONNMARK", "--save-mark"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if check_connmark.returncode != 0:
+            subprocess.run(
+                ["iptables", "-t", "mangle", "-A", "VEXTUNNEL_MANGLE_OUT", "!", "-o", "lo", "-m", "owner", "--uid-owner", uid_str, "-j", "CONNMARK", "--save-mark"],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+
+        # 2. In filter table VEXTUNNEL_QUOTA, ensure passive mark counter rule exists
+        # Clean up legacy -m owner --uid-owner rules if present so egress is not double-counted
+        subprocess.run(
+            ["iptables", "-D", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", uid_str, "-j", "ACCEPT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        subprocess.run(
+            ["iptables", "-D", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", uid_str],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+        check_quota = subprocess.run(
+            ["iptables", "-C", "VEXTUNNEL_QUOTA", "-m", "mark", "--mark", uid_str],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if check_quota.returncode != 0:
+            subprocess.run(
+                ["iptables", "-A", "VEXTUNNEL_QUOTA", "-m", "mark", "--mark", uid_str],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            logger.info(f"Initialized bidirectional iptables accounting rule for UID {uid} in VEXTUNNEL_QUOTA")
         return True
     except Exception as e:
         logger.debug(f"Failed to setup accounting rule for UID {uid}: {e}")
         return False
 
+def remove_accounting_rule(uid: int) -> bool:
+    """Remove accounting and marking rules for UID from iptables."""
+    if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
+        return False
+    try:
+        uid_str = str(uid)
+        while True:
+            r1 = subprocess.run(["iptables", "-D", "VEXTUNNEL_QUOTA", "-m", "mark", "--mark", uid_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if r1.returncode != 0:
+                break
+        while True:
+            r2 = subprocess.run(["iptables", "-D", "VEXTUNNEL_QUOTA", "-m", "owner", "--uid-owner", uid_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if r2.returncode != 0:
+                break
+        while True:
+            r3 = subprocess.run(["iptables", "-t", "mangle", "-D", "VEXTUNNEL_MANGLE_OUT", "!", "-o", "lo", "-m", "owner", "--uid-owner", uid_str, "-j", "MARK", "--set-mark", uid_str], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if r3.returncode != 0:
+                break
+        while True:
+            r4 = subprocess.run(["iptables", "-t", "mangle", "-D", "VEXTUNNEL_MANGLE_OUT", "!", "-o", "lo", "-m", "owner", "--uid-owner", uid_str, "-j", "CONNMARK", "--save-mark"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if r4.returncode != 0:
+                break
+        return True
+    except Exception as e:
+        logger.debug(f"Failed to remove accounting rules for UID {uid}: {e}")
+        return False
+
 def read_uid_bytes(uid: int) -> int:
-    """Parse exact byte count for UID from isolated VEXTUNNEL_QUOTA chain."""
+    """Parse exact byte count for UID from isolated VEXTUNNEL_QUOTA chain (matches both ingress and egress)."""
     if os.name == 'nt':
         return 0
     try:
@@ -194,11 +294,14 @@ def read_uid_bytes(uid: int) -> int:
             capture_output=True, text=True, timeout=5
         )
         total_bytes = 0
+        hex_mark = f"{uid:#x}"
+        target_mark_hex = f"mark match {hex_mark}"
+        target_mark_dec = f"mark match {uid}"
         target_uid_str = f"owner UID match {uid}"
         target_uid_alt = f"--uid-owner {uid}"
 
         for line in res.stdout.splitlines():
-            if target_uid_str in line or target_uid_alt in line:
+            if target_mark_hex in line or target_mark_dec in line or target_uid_str in line or target_uid_alt in line:
                 parts = line.split()
                 if len(parts) >= 2:
                     try:
@@ -212,21 +315,31 @@ def read_uid_bytes(uid: int) -> int:
         return 0
 
 def block_user_network(uid: int) -> bool:
-    """Insert iptables DROP rule in VEXTUNNEL_BLOCK to cleanly block network egress."""
+    """Insert iptables DROP rules in VEXTUNNEL_BLOCK to cleanly block network traffic."""
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
         init_firewall_chains()
-        check = subprocess.run(
-            ["iptables", "-C", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
+        uid_str = str(uid)
+        check_owner = subprocess.run(
+            ["iptables", "-C", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", uid_str, "-j", "DROP"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        if check.returncode != 0:
+        if check_owner.returncode != 0:
             subprocess.run(
-                ["iptables", "-A", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
+                ["iptables", "-A", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", uid_str, "-j", "DROP"],
                 check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
-            logger.warning(f"Firewall: Inserted network DROP rule for UID {uid} in VEXTUNNEL_BLOCK")
+        check_mark = subprocess.run(
+            ["iptables", "-C", "VEXTUNNEL_BLOCK", "-m", "mark", "--mark", uid_str, "-j", "DROP"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        if check_mark.returncode != 0:
+            subprocess.run(
+                ["iptables", "-A", "VEXTUNNEL_BLOCK", "-m", "mark", "--mark", uid_str, "-j", "DROP"],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+        logger.warning(f"Firewall: Inserted network DROP rules for UID {uid} in VEXTUNNEL_BLOCK")
         return True
     except Exception as e:
         logger.error(f"Error blocking network for UID {uid}: {e}")
@@ -237,9 +350,17 @@ def unblock_user_network(uid: int) -> bool:
     if os.name == 'nt' or not hasattr(os, 'geteuid') or os.geteuid() != 0:
         return False
     try:
+        uid_str = str(uid)
         while True:
             res = subprocess.run(
-                ["iptables", "-D", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", str(uid), "-j", "DROP"],
+                ["iptables", "-D", "VEXTUNNEL_BLOCK", "-m", "owner", "--uid-owner", uid_str, "-j", "DROP"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            if res.returncode != 0:
+                break
+        while True:
+            res = subprocess.run(
+                ["iptables", "-D", "VEXTUNNEL_BLOCK", "-m", "mark", "--mark", uid_str, "-j", "DROP"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
             if res.returncode != 0:
