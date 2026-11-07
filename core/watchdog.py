@@ -37,6 +37,8 @@ CORE_SERVICES = [
     "vextunnel-ws",
     "vextunnel-wss",
     "vextunnel-enforcer",
+    "vextunnel-sub",
+    "vextunnel-cloudflared",
     "dropbear",
     "badvpn-7300"
 ]
@@ -311,6 +313,19 @@ class ServiceWatchdog:
             try:
                 from core.ports_manager import load_ports
                 if not load_ports().get("WSS_ENABLED", True):
+                    return {
+                        "service": service_name,
+                        "status": "disabled",
+                        "healed": False,
+                        "circuit_breaker": False
+                    }
+            except Exception:
+                pass
+
+        if service_name == "vextunnel-cloudflared":
+            try:
+                from core.cf_tunnel import load_cf_config
+                if not load_cf_config().get("TUNNEL_TOKEN"):
                     return {
                         "service": service_name,
                         "status": "disabled",

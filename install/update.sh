@@ -49,7 +49,7 @@ main() {
 
     # 2. Record pre-update active services
     ACTIVE_SERVICES=()
-    for svc in vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer dropbear badvpn-7300; do
+    for svc in vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer vextunnel-sub vextunnel-cloudflared dropbear badvpn-7300; do
         if systemctl is-active --quiet "$svc" 2>/dev/null; then
             ACTIVE_SERVICES+=("$svc")
         fi
@@ -241,14 +241,17 @@ print('  ✓ Database migrations verified OK')
     for svc in "${ACTIVE_SERVICES[@]}"; do
         systemctl start "$svc" 2>/dev/null || true
     done
-    systemctl start vextunnel-enforcer 2>/dev/null || true
+    systemctl start vextunnel-enforcer vextunnel-sub 2>/dev/null || true
+    if [ -f /etc/vextunnel/cf_tunnel.env ] && grep -qE '^TUNNEL_TOKEN=[a-zA-Z0-9_-]+' /etc/vextunnel/cf_tunnel.env; then
+        systemctl start vextunnel-cloudflared 2>/dev/null || true
+    fi
 
     sleep 3 # Settling delay
 
     # Service & Socket Health Verification
     HEALTH_FAIL=false
     FAILED_SVCS=()
-    for svc in vextunnel-ws vextunnel-enforcer dropbear; do
+    for svc in vextunnel-ws vextunnel-enforcer vextunnel-sub dropbear; do
         if ! systemctl is-active --quiet "$svc" 2>/dev/null; then
             FAILED_SVCS+=("$svc")
             HEALTH_FAIL=true

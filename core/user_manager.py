@@ -94,6 +94,7 @@ class UserManager:
                     last_quota_alert_pct INTEGER DEFAULT 0,
                     quota_status TEXT DEFAULT 'active',
                     last_quota_sync TIMESTAMP,
+                    sub_token TEXT UNIQUE,
                     status TEXT DEFAULT 'active'
                 )
             """)
@@ -190,6 +191,13 @@ class UserManager:
                 conn.execute("ALTER TABLE users ADD COLUMN quota_status TEXT DEFAULT 'active'")
             if "last_quota_sync" not in cols_after:
                 conn.execute("ALTER TABLE users ADD COLUMN last_quota_sync TIMESTAMP")
+            if "sub_token" not in cols_after:
+                conn.execute("ALTER TABLE users ADD COLUMN sub_token TEXT")
+            # Backfill any users missing sub_token with a secure 32-char hex token
+            null_token_rows = conn.execute("SELECT id FROM users WHERE sub_token IS NULL OR sub_token = ''").fetchall()
+            for nr in null_token_rows:
+                conn.execute("UPDATE users SET sub_token = ? WHERE id = ?", (secrets.token_hex(16), nr["id"]))
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_sub_token ON users(sub_token);")
             conn.commit()
 
         if os.name != 'nt' and hasattr(os, 'geteuid') and os.geteuid() == 0:
@@ -232,12 +240,13 @@ class UserManager:
                 subprocess.run(["userdel", "-f", username])
                 raise RuntimeError(f"Failed to set user password: {err}")
 
+        sub_token = secrets.token_hex(16)
         # Record in SQLite with hashed password (no plaintext column)
         with self._get_connection() as conn:
             conn.execute("""
-                INSERT INTO users (username, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, quota_status, status)
-                VALUES (?, ?, ?, ?, ?, ?, 0, 'active', 'active')
-            """, (username, pwd_hash, protocol, exp_str, max_logins, quota_bytes))
+                INSERT INTO users (username, password_hash, protocol, expires_at, max_logins, quota_bytes, used_bytes, quota_status, status, sub_token)
+                VALUES (?, ?, ?, ?, ?, ?, 0, 'active', 'active', ?)
+            """, (username, pwd_hash, protocol, exp_str, max_logins, quota_bytes, sub_token))
             conn.commit()
 
         return {
@@ -248,6 +257,7 @@ class UserManager:
             "max_logins": max_logins,
             "quota_bytes": quota_bytes,
             "quota_status": "active",
+            "sub_token": sub_token,
             "status": "active"
         }
 
@@ -386,6 +396,7 @@ class UserManager:
                     "last_quota_alert_pct": r["last_quota_alert_pct"] if "last_quota_alert_pct" in cols else 0,
                     "quota_status": r["quota_status"] if "quota_status" in cols else "active",
                     "last_quota_sync": r["last_quota_sync"] if "last_quota_sync" in cols else None,
+                    "sub_token": r["sub_token"] if "sub_token" in cols and r["sub_token"] else "",
                     "status": status
                 })
 
@@ -398,6 +409,75 @@ class UserManager:
                 conn.commit()
 
         return users
+
+    def get_user_by_token(self, token: str) -> Optional[Dict]:
+        """Fetch user record strictly by 32-character hexadecimal subscription token."""
+        if not token or not re.fullmatch(r"^[0-9a-f]{32}$", token.strip().lower()):
+            return None
+        token = token.strip().lower()
+        now = datetime.datetime.now()
+        with self._get_connection() as conn:
+            r = conn.execute("SELECT * FROM users WHERE sub_token = ?", (token,)).fetchone()
+            if not r:
+                return None
+            exp = datetime.datetime.strptime(r["expires_at"], "%Y-%m-%d %H:%M:%S")
+            diff = exp - now
+            remaining_days = max(0, diff.days)
+            is_expired = diff.total_seconds() <= 0
+            status = "expired" if is_expired else r["status"]
+            cols = r.keys()
+            return {
+                "id": r["id"],
+                "username": r["username"],
+                "protocol": r["protocol"],
+                "expires_at": r["expires_at"],
+                "remaining_days": remaining_days,
+                "max_logins": r["max_logins"],
+                "quota_bytes": r["quota_bytes"],
+                "used_bytes": r["used_bytes"],
+                "quota_status": r["quota_status"] if "quota_status" in cols else "active",
+                "sub_token": r["sub_token"],
+                "status": status
+            }
+
+    def get_user_by_username(self, username: str) -> Optional[Dict]:
+        """Fetch user record by username."""
+        username = username.strip().lower()
+        now = datetime.datetime.now()
+        with self._get_connection() as conn:
+            r = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+            if not r:
+                return None
+            exp = datetime.datetime.strptime(r["expires_at"], "%Y-%m-%d %H:%M:%S")
+            diff = exp - now
+            remaining_days = max(0, diff.days)
+            is_expired = diff.total_seconds() <= 0
+            status = "expired" if is_expired else r["status"]
+            cols = r.keys()
+            return {
+                "id": r["id"],
+                "username": r["username"],
+                "protocol": r["protocol"],
+                "expires_at": r["expires_at"],
+                "remaining_days": remaining_days,
+                "max_logins": r["max_logins"],
+                "quota_bytes": r["quota_bytes"],
+                "used_bytes": r["used_bytes"],
+                "quota_status": r["quota_status"] if "quota_status" in cols else "active",
+                "sub_token": r["sub_token"] if "sub_token" in cols and r["sub_token"] else "",
+                "status": status
+            }
+
+    def regenerate_sub_token(self, username: str) -> str:
+        """Regenerate a new 32-character hexadecimal subscription token for user."""
+        username = username.strip().lower()
+        new_token = secrets.token_hex(16)
+        with self._get_connection() as conn:
+            cur = conn.execute("UPDATE users SET sub_token = ? WHERE username = ?", (new_token, username))
+            conn.commit()
+            if cur.rowcount == 0:
+                raise ValueError(f"User '{username}' not found.")
+        return new_token
 
     def sync_orphaned_system_users(self) -> int:
         """Lock or remove orphaned Linux accounts with restricted shells that are not registered in VexTunnel."""

@@ -141,6 +141,48 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
 
+# Create Subscription Web Portal Service (Strict Hardened Sandbox)
+cat <<'EOF' > /etc/systemd/system/vextunnel-sub.service
+[Unit]
+Description=VexTunnel Client Subscription Web Portal
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /etc/vextunnel/core/sub_server.py
+Restart=always
+RestartSec=3s
+LimitNOFILE=65536
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/vextunnel
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Create Cloudflare Zero Trust Tunnel Service
+cat <<'EOF' > /etc/systemd/system/vextunnel-cloudflared.service
+[Unit]
+Description=VexTunnel Cloudflare Zero Trust Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/vextunnel/cf_tunnel.env
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
 systemctl daemon-reload
 
 # Check if WSS is enabled or disabled
@@ -152,13 +194,20 @@ if [ -f /etc/vextunnel/ports.env ]; then
 fi
 
 if [ "$WSS_ACTIVE" = "true" ]; then
-    systemctl enable vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer
-    systemctl restart vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer
-    echo "==> VexTunnel Services (WS 80, WSS 443, Session Enforcer) active!"
+    systemctl enable vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer vextunnel-sub
+    systemctl restart vextunnel-ws vextunnel-wss vextunnel-ws-8880 vextunnel-enforcer vextunnel-sub
+    echo "==> VexTunnel Services (WS 80, WSS 443, Session Enforcer, Sub Portal 8088) active!"
 else
     systemctl stop vextunnel-wss 2>/dev/null || true
     systemctl disable vextunnel-wss 2>/dev/null || true
-    systemctl enable vextunnel-ws vextunnel-ws-8880 vextunnel-enforcer
-    systemctl restart vextunnel-ws vextunnel-ws-8880 vextunnel-enforcer
-    echo "==> VexTunnel Services (WS 80, 8880, Session Enforcer) active (WSS Standby for 3x-ui)!"
+    systemctl enable vextunnel-ws vextunnel-ws-8880 vextunnel-enforcer vextunnel-sub
+    systemctl restart vextunnel-ws vextunnel-ws-8880 vextunnel-enforcer vextunnel-sub
+    echo "==> VexTunnel Services (WS 80, 8880, Session Enforcer, Sub Portal 8088) active (WSS Standby for 3x-ui)!"
+fi
+
+# If Cloudflare Tunnel Token is configured, activate tunnel
+if [ -f /etc/vextunnel/cf_tunnel.env ] && grep -qE '^TUNNEL_TOKEN=[a-zA-Z0-9_-]+' /etc/vextunnel/cf_tunnel.env; then
+    systemctl enable vextunnel-cloudflared 2>/dev/null || true
+    systemctl restart vextunnel-cloudflared 2>/dev/null || true
+    echo "==> VexTunnel Cloudflare Zero Trust Tunnel active!"
 fi

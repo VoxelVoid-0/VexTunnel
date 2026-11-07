@@ -1,0 +1,15 @@
+[Unit]
+Description=VexTunnel Cloudflare Zero Trust Tunnel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/vextunnel/cf_tunnel.env
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
