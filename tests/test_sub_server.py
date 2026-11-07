@@ -151,7 +151,7 @@ class TestSubServerAndTokens(unittest.TestCase):
             html = resp.read().decode("utf-8")
             self.assertIn("activeuser", html)
             self.assertIn("ACTIVE", html)
-            self.assertIn("Traffic &amp; Quota", html)
+            self.assertIn("Traffic & Quota", html)
             self.assertIn("Auto-syncs every 60s", html)
             # Verify Apps and Configs are omitted
             self.assertNotIn("v2rayN", html)
