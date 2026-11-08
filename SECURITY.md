@@ -27,7 +27,15 @@ The following versions of **VexTunnel** are currently supported with security an
    - Administrative SSH access (`root`) is segregated from Dropbear tunnel ports (`109`, `143`).
    - Passwords are encrypted using salted PBKDF2-SHA256 with 200,000 hashing rounds.
 
-4. **Update Safety & Rollback:**
+4. **Subscription Portal & Cloudflare Zero Trust Hardening:**
+   - **Origin Obfuscation & Localhost Binding:** The subscription server binds strictly to `127.0.0.1:8088`. Zero public inbound firewall ports are opened for the web portal. All web traffic is routed exclusively through the Cloudflare Zero Trust Named Tunnel (`cloudflared`).
+   - **Cryptographic Tokens:** Subscription URLs use 128-bit cryptographically secure hex tokens generated via Python `secrets.token_hex(16)`.
+   - **Pre-Database Regex Sanitization:** Inbound tokens are validated against `^[0-9a-f]{32}$` before querying SQLite, providing DoS and SQL injection immunity.
+   - **In-Memory Rate Limiting:** A thread-safe rate limiter tracks real client IPs via `CF-Connecting-IP` (capped at 30 requests per minute per IP) returning `HTTP 429 Too Many Requests` upon violation.
+   - **Concurrency & Non-Locking DB Reads:** The portal queries SQLite strictly via short-lived read-only URI connections (`mode=ro`), preventing `database is locked` contention with the real-time session enforcer.
+   - **Credential Protection:** Cloudflare tunnel tokens are stored in `/etc/vextunnel/cf_tunnel.env` with `chmod 600` permissions and loaded via systemd `EnvironmentFile` to hide secrets from `ps aux` command-line inspections.
+
+5. **Update Safety & Rollback:**
    - The self-update engine verifies archive integrity and compiles Python bytecode (`py_compile`) in staging before promoting code to production.
    - Automated two-tier rollback restores both codebase snapshots and SQLite native database backups if post-update health checks fail.
 
