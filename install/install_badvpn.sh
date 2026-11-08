@@ -33,6 +33,7 @@ if [ ! -f /usr/local/bin/badvpn-udpgw ]; then
                 if [ -f "udpgw/badvpn-udpgw" ]; then
                     cp udpgw/badvpn-udpgw /usr/local/bin/badvpn-udpgw
                     chmod 755 /usr/local/bin/badvpn-udpgw
+                    ln -sf /usr/local/bin/badvpn-udpgw /usr/bin/badvpn-udpgw 2>/dev/null || true
                     BUILD_SUCCESS=1
                     echo "==> badvpn-udpgw compiled and installed successfully from source!"
                 fi
