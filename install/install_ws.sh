@@ -23,7 +23,13 @@ if [ "$DIR" != "/etc/vextunnel" ]; then
     cp "$DIR/core/ports_manager.py" /etc/vextunnel/core/ 2>/dev/null || true
     cp "$DIR/core/monitor.py" /etc/vextunnel/core/
     cp "$DIR/core/updater.py" /etc/vextunnel/core/ 2>/dev/null || true
+    cp "$DIR/core/sub_server.py" /etc/vextunnel/core/ 2>/dev/null || true
+    cp "$DIR/core/cf_tunnel.py" /etc/vextunnel/core/ 2>/dev/null || true
     cp "$DIR/cli/menu.py" /etc/vextunnel/cli/
+    if [ -d "$DIR/web" ]; then
+        mkdir -p /etc/vextunnel/web
+        cp -r "$DIR/web/"* /etc/vextunnel/web/ 2>/dev/null || true
+    fi
 fi
 
 # Ensure default ports.env exists without clobbering user overrides
@@ -46,6 +52,7 @@ chmod +x /etc/vextunnel/core/ws_proxy.py
 chmod +x /etc/vextunnel/core/session_enforcer.py
 chmod +x /etc/vextunnel/core/quota_manager.py
 chmod +x /etc/vextunnel/core/ports_manager.py 2>/dev/null || true
+chmod +x /etc/vextunnel/core/sub_server.py 2>/dev/null || true
 chmod +x /etc/vextunnel/cli/menu.py
 
 # Create global 'menu' command

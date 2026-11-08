@@ -199,6 +199,9 @@ class TestSubServerAndTokens(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(url_fake)
         self.assertEqual(ctx.exception.code, 404)
+        body = ctx.exception.read().decode("utf-8")
+        self.assertIn("yetiSVG", body)
+        self.assertIn("Hello?? Is somebody there?!?", body)
 
         # Invalid token format (e.g. wrong length)
         url_bad = f"http://127.0.0.1:{self.server_port}/sub/invalidtoken123"
@@ -211,6 +214,24 @@ class TestSubServerAndTokens(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             urllib.request.urlopen(url_rogue)
         self.assertEqual(ctx.exception.code, 404)
+
+    def test_08b_static_assets_serving(self):
+        """Verify static CSS and JS assets for 404 error page are served correctly."""
+        # Test root style.css and script.js
+        for asset, expected_type in [("style.css", "text/css"), ("script.js", "javascript")]:
+            url = f"http://127.0.0.1:{self.server_port}/{asset}"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req) as resp:
+                self.assertEqual(resp.status, 200)
+                self.assertIn(expected_type, resp.headers.get("Content-Type", ""))
+                content = resp.read().decode("utf-8")
+                self.assertGreater(len(content), 10)
+
+        # Test sub-path /sub/style.css
+        url_sub = f"http://127.0.0.1:{self.server_port}/sub/style.css"
+        with urllib.request.urlopen(urllib.request.Request(url_sub)) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/css", resp.headers.get("Content-Type", ""))
 
     def test_09_in_memory_rate_limiter(self):
         """Verify ThreadSafeRateLimiter blocks requests exceeding threshold."""
