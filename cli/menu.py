@@ -962,6 +962,7 @@ class VexTunnelMenu:
         from core.cf_tunnel import (
             get_tunnel_status,
             setup_tunnel_token,
+            clean_and_validate_cf_token,
             set_custom_sub_domain,
             set_portal_port,
             get_sub_url,
@@ -972,49 +973,76 @@ class VexTunnelMenu:
             self.print_banner()
             status = get_tunnel_status()
             portal_status_str = f"{GREEN}RUNNING (127.0.0.1:{status['port']}){RESET}" if status["sub_service_active"] else f"{YELLOW}STANDBY / STOPPED{RESET}"
-            cf_status_str = f"{GREEN}CONNECTED & ACTIVE{RESET}" if status["cf_service_active"] else f"{YELLOW}DISCONNECTED / NOT CONFIGURED{RESET}"
-            token_str = f"{GREEN}CONFIGURED [PROTECTED]{RESET}" if status["has_token"] else f"{RED}NOT SET{RESET}"
+            cf_status_str = f"{GREEN}CONNECTED & ACTIVE{RESET}" if status["cf_service_active"] else (f"{RED}CRASHING / INVALID TOKEN{RESET}" if status.get("raw_token") and not status["is_valid_token"] else f"{YELLOW}DISCONNECTED / NOT CONFIGURED{RESET}")
+
+            if status["is_valid_token"]:
+                token_str = f"{GREEN}CONFIGURED ({status['token_preview']}){RESET} [PROTECTED]"
+            elif status.get("raw_token"):
+                token_str = f"{RED}INVALID INPUT ('{status['raw_token']}') - PLEASE RE-ENTER{RESET}"
+            else:
+                token_str = f"{RED}NOT SET{RESET}"
+
             subdomain_str = f"{CYAN}{status['subdomain']}{RESET}" if status["subdomain"] else f"{YELLOW}NOT SET{RESET}"
 
             print(f"\n{BOLD}{CYAN}=== CLOUDFLARE ZERO TRUST & SUBSCRIPTION PORTAL ==={RESET}\n")
-            print(f" {WHITE}Local Portal Binding :{RESET} {portal_status_str}")
-            print(f" {WHITE}Cloudflare Tunnel    :{RESET} {cf_status_str}")
-            print(f" {WHITE}Tunnel Token Status  :{RESET} {token_str}")
-            print(f" {WHITE}Public Subdomain     :{RESET} {subdomain_str}")
+            print(f" {BOLD}[ TUNNEL & PORTAL STATUS ]{RESET}")
+            print(f"  {WHITE}Local Portal Binding :{RESET} {portal_status_str}")
+            print(f"  {WHITE}Cloudflare Tunnel    :{RESET} {cf_status_str}")
+            print(f"  {WHITE}Tunnel Token Status  :{RESET} {token_str}")
+            print(f"  {WHITE}Public Subdomain     :{RESET} {subdomain_str}")
             print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
-            print(f"  {CYAN}1){RESET} Set / Update Cloudflare Zero Trust Tunnel Token")
-            print(f"  {CYAN}2){RESET} Set Custom Subscription Subdomain (e.g. usage.mydomain.com)")
+            print(f" {BOLD}[ CLOUDFLARE ZERO TRUST SETTINGS ]{RESET}")
+            print(f"  {CYAN}1){RESET} Set / Update Cloudflare Tunnel Token (from Cloudflare Dashboard)")
+            print(f"  {CYAN}2){RESET} Set Custom Subscription Subdomain (e.g. sub.nexiv.site)")
             print(f"  {CYAN}3){RESET} Change Local Portal Port (Default: 8088)")
-            print(f"  {CYAN}4){RESET} Regenerate a Client's Subscription Token")
-            print(f"  {CYAN}5){RESET} View Client Subscription Links")
-            print(f"  {CYAN}6){RESET} Restart Subscription & Tunnel Services")
+            print(f"")
+            print(f" {BOLD}[ CLIENT SUBSCRIPTION LINKS ]{RESET}")
+            print(f"  {CYAN}4){RESET} View All Client Subscription Links (Cards & Usage)")
+            print(f"  {CYAN}5){RESET} Regenerate a Client's Subscription Secret Token")
+            print(f"")
+            print(f" {BOLD}[ SYSTEM CONTROLS & DIAGNOSTICS ]{RESET}")
+            print(f"  {CYAN}6){RESET} Restart Subscription & Cloudflare Services")
+            print(f"  {CYAN}7){RESET} Live Subscription & Tunnel Diagnostic Doctor")
             print(f"")
             print(f"  {RED}0){RESET} Return to Main Menu")
             print(f"{DIM}──────────────────────────────────────────────────────────────{RESET}")
 
-            sub_choice = safe_input(f"{WHITE}Select an option [0-6]: {RESET}")
+            sub_choice = safe_input(f"{WHITE}Select an option [0-7]: {RESET}")
             if sub_choice == "1":
                 self.print_banner()
                 print(f"\n{BOLD}{GREEN}=== CONFIGURE CLOUDFLARE ZERO TRUST TUNNEL ==={RESET}\n")
-                print(f"{WHITE}In Cloudflare Zero Trust Dashboard (Zero Trust -> Networks -> Tunnels):{RESET}")
-                print(f" 1. Create a tunnel (e.g. 'vextunnel')")
-                print(f" 2. Copy the Tunnel Token")
-                print(f" 3. Under Public Hostnames, route your subdomain to: {YELLOW}HTTP localhost:{status['port']}{RESET}\n")
-                token = safe_input(f"{WHITE}Paste Cloudflare Tunnel Token (or '0' to cancel): {RESET}")
-                if token and token not in ('0', 'q', 'exit'):
+                print(f"{WHITE}Quick Setup Instructions:{RESET}")
+                print(f" • Step 1: Open Cloudflare Zero Trust (https://one.dash.cloudflare.com/)")
+                print(f"           Navigate to: Networks -> Tunnels")
+                print(f" • Step 2: Create a tunnel (e.g. 'vextunnel') or select your existing one")
+                print(f" • Step 3: Copy the Tunnel Token (long base64 string starting with 'eyJh...')")
+                print(f"           (Or copy the command: 'cloudflared service install <token>')")
+                print(f" • Step 4: Under 'Public Hostnames' in Cloudflare, add your subdomain (e.g. sub.nexiv.site)")
+                print(f"           and route Service to: {YELLOW}HTTP localhost:{status['port']}{RESET}\n")
+
+                raw_token_in = safe_input(f"{WHITE}Paste Cloudflare Tunnel Token (or '0' to cancel): {RESET}")
+                if raw_token_in and raw_token_in not in ('0', 'q', 'exit'):
+                    is_valid, cleaned_tok, err_msg = clean_and_validate_cf_token(raw_token_in)
+                    if not is_valid:
+                        print(f"\n{RED}❌ Invalid Cloudflare Token:{RESET}")
+                        print(f"   {YELLOW}{err_msg}{RESET}")
+                        wait_enter()
+                        continue
+
                     if not is_cloudflared_installed():
                         print(f"\n{CYAN}==> Installing official cloudflared package...{RESET}")
                         install_cloudflared()
                     print(f"\n{CYAN}==> Saving token to protected config and restarting tunnel...{RESET}")
-                    if setup_tunnel_token(token):
+                    if setup_tunnel_token(cleaned_tok):
                         print(f"{GREEN}✅ Cloudflare Zero Trust tunnel configured and started successfully!{RESET}")
+                        print(f"   Token: {cleaned_tok[:6]}...{cleaned_tok[-4:]} (Protected in /etc/vextunnel/cf_tunnel.env)")
                     else:
                         print(f"{RED}❌ Failed to configure Cloudflare tunnel service. Check permissions.{RESET}")
                     wait_enter()
             elif sub_choice == "2":
                 self.print_banner()
                 print(f"\n{BOLD}{GREEN}=== SET CUSTOM SUBSCRIPTION SUBDOMAIN ==={RESET}\n")
-                print(f"{WHITE}Example: {YELLOW}usage.example.com{RESET} or {YELLOW}sub.mysite.com{RESET}")
+                print(f"{WHITE}Example: {YELLOW}sub.nexiv.site{RESET} or {YELLOW}usage.example.com{RESET}")
                 domain = safe_input(f"{WHITE}Enter Subdomain (or '0' to cancel): {RESET}")
                 if domain and domain not in ('0', 'q', 'exit'):
                     try:
@@ -1039,6 +1067,18 @@ class VexTunnelMenu:
                     wait_enter()
             elif sub_choice == "4":
                 self.print_banner()
+                print(f"\n{BOLD}{GREEN}=== CLIENT SUBSCRIPTION LINKS ==={RESET}\n")
+                users = self.user_mgr.list_users()
+                if not users:
+                    print(f"{YELLOW}No registered users found.{RESET}")
+                else:
+                    for u in users:
+                        tok = u.get("sub_token", "")
+                        link = get_sub_url(tok) if tok else "[NO_TOKEN]"
+                        print(f" • {WHITE}{u['username']:<14}{RESET} : {CYAN}{link}{RESET}")
+                wait_enter()
+            elif sub_choice == "5":
+                self.print_banner()
                 print(f"\n{BOLD}{GREEN}=== REGENERATE CLIENT SUBSCRIPTION TOKEN ==={RESET}\n")
                 username = safe_input(f"{WHITE}Enter Username (or '0' to cancel): {RESET}")
                 if username and username not in ('0', 'q', 'exit'):
@@ -1050,18 +1090,6 @@ class VexTunnelMenu:
                     except Exception as e:
                         print(f"\n{RED}Error: {e}{RESET}")
                     wait_enter()
-            elif sub_choice == "5":
-                self.print_banner()
-                print(f"\n{BOLD}{GREEN}=== CLIENT SUBSCRIPTION LINKS ==={RESET}\n")
-                users = self.user_mgr.list_users()
-                if not users:
-                    print(f"{YELLOW}No registered users found.{RESET}")
-                else:
-                    for u in users:
-                        tok = u.get("sub_token", "")
-                        link = get_sub_url(tok) if tok else "[NO_TOKEN]"
-                        print(f" • {WHITE}{u['username']:<14}{RESET} : {CYAN}{link}{RESET}")
-                wait_enter()
             elif sub_choice == "6":
                 self.print_banner()
                 print(f"\n{CYAN}==> Restarting vextunnel-sub and vextunnel-cloudflared...{RESET}")
@@ -1069,6 +1097,41 @@ class VexTunnelMenu:
                 subprocess.run(["systemctl", "restart", "vextunnel-cloudflared"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 print(f"{GREEN}✅ Services restarted.{RESET}")
                 time.sleep(1.5)
+            elif sub_choice == "7":
+                self.print_banner()
+                print(f"\n{BOLD}{CYAN}=== SUBSCRIPTION & CLOUDFLARE LIVE DIAGNOSTICS ==={RESET}\n")
+                cur_port = status['port']
+                is_sub_listening = VexTunnelDoctor.check_port_listener(cur_port)
+                port_col = GREEN if is_sub_listening else RED
+                port_txt = f"{port_col}{'LISTENING (OK)' if is_sub_listening else 'CLOSED / NOT LISTENING'}{RESET}"
+                print(f" • Local Web Server (127.0.0.1:{cur_port}) : {port_txt}")
+
+                try:
+                    import urllib.request
+                    req = urllib.request.urlopen(f"http://127.0.0.1:{cur_port}/health", timeout=2.0)
+                    health_ok = (req.status == 200)
+                except Exception:
+                    health_ok = False
+                health_txt = f"{GREEN}PASS (200 OK){RESET}" if health_ok else f"{RED}FAIL (Unreachable){RESET}"
+                print(f" • Local /health HTTP Probe        : {health_txt}")
+
+                cf_svc_txt = f"{GREEN}RUNNING (Active){RESET}" if status['cf_service_active'] else f"{RED}CRASHED / STOPPED{RESET}"
+                print(f" • cloudflared Systemd Daemon      : {cf_svc_txt}")
+
+                if status['is_valid_token']:
+                    tok_txt = f"{GREEN}VALID ({status['token_preview']}){RESET}"
+                elif status.get('raw_token'):
+                    tok_txt = f"{RED}INVALID ('{status['raw_token']}'){RESET}"
+                else:
+                    tok_txt = f"{RED}MISSING (Not Configured){RESET}"
+                print(f" • Cloudflare Tunnel Token         : {tok_txt}")
+
+                if status['subdomain']:
+                    print(f" • Public Portal Subdomain         : {CYAN}https://{status['subdomain']}{RESET}")
+                else:
+                    print(f" • Public Portal Subdomain         : {YELLOW}NOT CONFIGURED{RESET}")
+
+                wait_enter()
             elif sub_choice in ("0", "q", "exit"):
                 break
 

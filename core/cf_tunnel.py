@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VexTunnel - Cloudflare Zero Trust Tunnel Manager (Hardened v1.3.14)
+VexTunnel - Cloudflare Zero Trust Tunnel Manager (Hardened v1.3.15)
 Author: VoxelVoid-0
 License: GPL-3.0
 
@@ -17,11 +17,44 @@ import sys
 import shutil
 import subprocess
 import re
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 CF_ENV_PATH = "/etc/vextunnel/cf_tunnel.env" if os.name != 'nt' else "cf_tunnel.env"
 CF_SERVICE_NAME = "vextunnel-cloudflared"
 DEFAULT_SUB_PORT = 8088
+
+def clean_and_validate_cf_token(raw_input: str) -> Tuple[bool, str, str]:
+    """
+    Clean, extract, and validate a Cloudflare Zero Trust Tunnel Token.
+    Returns: (is_valid: bool, cleaned_token: str, error_message: str)
+    """
+    if not raw_input:
+        return False, "", "Token cannot be empty."
+
+    cleaned = raw_input.strip()
+
+    # Auto-extract token if user pasted the full install command
+    # e.g.: 'cloudflared service install eyJh...' or 'sudo cloudflared.exe service install eyJh...'
+    if "service install" in cleaned.lower():
+        parts = cleaned.split()
+        if parts:
+            cleaned = parts[-1].strip()
+
+    # Check for accidental menu selections or tiny strings (e.g. '1', '2', 'test')
+    if len(cleaned) < 30:
+        return False, cleaned, (
+            f"The entered string is too short ({len(cleaned)} chars). "
+            "Cloudflare Zero Trust tokens are long base64 strings (starting with 'eyJh...'). "
+            "Please copy the actual tunnel token from Cloudflare Zero Trust Dashboard."
+        )
+
+    # Cloudflare tokens are base64-encoded JSON strings (alphanumeric, +, /, -, _, =)
+    if not re.fullmatch(r"^[A-Za-z0-9+/=_-]{30,}$", cleaned):
+        return False, cleaned, (
+            "Invalid token characters. A Cloudflare tunnel token contains only base64 characters (letters, numbers, +, /, -, _, =)."
+        )
+
+    return True, cleaned, ""
 
 def load_cf_config() -> Dict[str, str]:
     """Load Cloudflare tunnel environment configuration."""
@@ -122,12 +155,12 @@ def install_cloudflared() -> bool:
 
 def setup_tunnel_token(token: str) -> bool:
     """Store Cloudflare Zero Trust tunnel token and restart tunnel service."""
-    token = token.strip()
-    if not token:
+    is_valid, cleaned, _ = clean_and_validate_cf_token(token)
+    if not is_valid:
         return False
 
     config = load_cf_config()
-    config["TUNNEL_TOKEN"] = token
+    config["TUNNEL_TOKEN"] = cleaned
     if not save_cf_config(config):
         return False
 
@@ -187,9 +220,21 @@ def get_tunnel_status() -> Dict:
     """Return dictionary with comprehensive tunnel and portal runtime status."""
     config = load_cf_config()
     installed = is_cloudflared_installed()
-    has_token = bool(config.get("TUNNEL_TOKEN", ""))
+    raw_token = config.get("TUNNEL_TOKEN", "").strip()
+    is_valid_token, cleaned_token, token_err = clean_and_validate_cf_token(raw_token) if raw_token else (False, "", "No token configured")
+    has_token = is_valid_token
     subdomain = config.get("SUB_DOMAIN", "")
     port = get_portal_port()
+
+    if is_valid_token:
+        if len(cleaned_token) >= 12:
+            token_preview = f"{cleaned_token[:6]}...{cleaned_token[-4:]}"
+        else:
+            token_preview = "CONFIGURED"
+    elif raw_token:
+        token_preview = f"INVALID ('{raw_token[:8]}')"
+    else:
+        token_preview = "NOT SET"
 
     cf_service_active = False
     sub_service_active = False
@@ -203,6 +248,10 @@ def get_tunnel_status() -> Dict:
     return {
         "installed": installed,
         "has_token": has_token,
+        "raw_token": raw_token,
+        "is_valid_token": is_valid_token,
+        "token_preview": token_preview,
+        "token_error": token_err,
         "subdomain": subdomain,
         "port": port,
         "cf_service_active": cf_service_active,

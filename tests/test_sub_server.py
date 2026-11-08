@@ -255,7 +255,46 @@ class TestSubServerAndTokens(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cf_tunnel.set_portal_port(80) # Below 1024
 
-    def test_11_head_request(self):
+    def test_11_token_validation_and_sanitization(self):
+        """Verify clean_and_validate_cf_token extracts and validates tokens properly."""
+        valid_tok = "eyJhIjoiMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIifQ=="
+        
+        # 1. Valid raw token
+        is_ok, cleaned, err = cf_tunnel.clean_and_validate_cf_token(valid_tok)
+        self.assertTrue(is_ok)
+        self.assertEqual(cleaned, valid_tok)
+        self.assertEqual(err, "")
+
+        # 2. Extract from full install command
+        cmd_input = f"sudo cloudflared service install {valid_tok}"
+        is_ok, cleaned, err = cf_tunnel.clean_and_validate_cf_token(cmd_input)
+        self.assertTrue(is_ok)
+        self.assertEqual(cleaned, valid_tok)
+
+        # 3. Reject menu choice '1' or short strings
+        is_ok, _, err = cf_tunnel.clean_and_validate_cf_token("1")
+        self.assertFalse(is_ok)
+        self.assertIn("too short", err)
+
+        is_ok, _, err = cf_tunnel.clean_and_validate_cf_token("")
+        self.assertFalse(is_ok)
+
+        # 4. Save and inspect status preview
+        env_file = os.path.join(self.test_dir, "cf_tunnel_tok.env")
+        with patch("core.cf_tunnel.CF_ENV_PATH", env_file):
+            # Test setup with invalid token fails
+            self.assertFalse(cf_tunnel.setup_tunnel_token("1"))
+
+            # Test setup with valid token succeeds
+            with patch("core.cf_tunnel.is_cloudflared_installed", return_value=True):
+                self.assertTrue(cf_tunnel.setup_tunnel_token(valid_tok))
+            
+            st = cf_tunnel.get_tunnel_status()
+            self.assertTrue(st["has_token"])
+            self.assertTrue(st["is_valid_token"])
+            self.assertIn("...", st["token_preview"])
+
+    def test_12_head_request(self):
         """Verify HEAD request returns 200 OK without body."""
         url = f"http://127.0.0.1:{self.server_port}/health"
         req = urllib.request.Request(url, method="HEAD")

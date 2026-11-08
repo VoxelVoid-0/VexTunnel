@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-VexTunnel - Client Subscription Web Portal (Hardened v1.3.14)
+VexTunnel - Client Subscription Web Portal (Hardened v1.3.15)
 Author: VoxelVoid-0
 License: GPL-3.0
 
@@ -80,7 +80,7 @@ class ThreadSafeRateLimiter:
 GLOBAL_RATE_LIMITER = ThreadSafeRateLimiter()
 
 class VexSubRequestHandler(BaseHTTPRequestHandler):
-    server_version = "VexTunnel-Portal/1.3.14"
+    server_version = "VexTunnel-Portal/1.3.15"
     sys_version = ""
 
     def get_client_ip(self) -> str:
